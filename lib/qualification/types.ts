@@ -21,6 +21,17 @@ export interface ProspectFit {
   why_this_person: string[];
   why_not_this_person: string[];
   missing_information: string[];
+  /**
+   * How product_relevance was arrived at. Mirrors CompanyFit.evidence_basis
+   * for the same reason: decision authority and seniority describe the ROLE,
+   * not whether this person owns the qualified workflow. "CEOs hold ultimate
+   * authority" is INFERRED; a source tying this specific person to the
+   * workflow (their own statement, a described responsibility, an explicit
+   * mention) is OBSERVED. Only OBSERVED may drive a high score.
+   */
+  evidence_basis: EvidenceBasis;
+  /** Verified evidence tying THIS person to the qualified workflow — see EvidenceItem. */
+  evidence: EvidenceItem[];
 }
 
 /**
@@ -32,6 +43,22 @@ export interface ProspectFit {
  */
 export type EvidenceBasis = 'OBSERVED' | 'INFERRED' | 'UNKNOWN';
 
+/**
+ * A single piece of evidence tying a claim to a specific retrieved source.
+ *
+ * A URL alone only proves a source was genuinely retrieved — it says nothing
+ * about whether that source's content actually supports the claim it is
+ * attached to. `quote` is a verbatim excerpt the model claims appears in that
+ * source; it exists so code (never the model's self-report) can mechanically
+ * confirm the source really says what the citation claims, the same way
+ * `AnalysisHook.supporting_quote` is verified for hooks via `quoteAppearsIn()`.
+ * An item that fails that check does not count as evidence at all.
+ */
+export interface EvidenceItem {
+  url: string;
+  quote: string;
+}
+
 /** One capability matched against observed company characteristics. */
 export interface CapabilityMatch {
   capability_id: string;
@@ -39,8 +66,8 @@ export interface CapabilityMatch {
   /** The workflow or operational context actually seen for this company. */
   company_signal: string;
   fit_strength: number;
-  /** Source URLs backing the observed workflow. */
-  evidence: string[];
+  /** Verified evidence backing the observed workflow — see EvidenceItem. */
+  evidence: EvidenceItem[];
   basis: EvidenceBasis;
   reason: string;
 }
@@ -49,7 +76,7 @@ export interface CapabilityMatch {
 export interface FitReason {
   reason: string;
   basis: EvidenceBasis;
-  evidence: string[];
+  evidence: EvidenceItem[];
 }
 
 /** Ceiling on company fit when nothing was directly observed. */
@@ -98,8 +125,14 @@ const RANK: Record<FitClassification, number> = { HIGH: 3, MEDIUM: 2, LOW: 1, UN
  * a high score — otherwise every bank qualifies without anyone checking whether
  * the workflow is actually there.
  *
+ * `m.evidence` at this point has already been through verifyEvidence() in
+ * qualify.ts, which drops any item whose URL was not genuinely retrieved or
+ * whose quote does not actually appear in that source — so "has evidence"
+ * here means "has evidence that was mechanically confirmed to say what it
+ * claims", not merely "cited a real URL".
+ *
  * Two caps, both one-directional (they can only lower a score):
- *   - a capability match citing no source cannot exceed UNEVIDENCED_MATCH_CEILING
+ *   - a capability match citing no verified source cannot exceed UNEVIDENCED_MATCH_CEILING
  *   - a company with no OBSERVED match cannot exceed INFERRED_ONLY_CEILING
  */
 export function applyEvidenceDiscipline(fit: CompanyFit): CompanyFit {
@@ -111,7 +144,7 @@ export function applyEvidenceDiscipline(fit: CompanyFit): CompanyFit {
 
     if (m.basis === 'OBSERVED' && !hasEvidence) {
       notes.push(
-        `"${m.capability_name}" was reported as observed but cited no source, so it was downgraded to inferred.`,
+        `"${m.capability_name}" was reported as observed but no cited source could be verified, so it was downgraded to inferred.`,
       );
     }
 
@@ -150,6 +183,76 @@ export function applyEvidenceDiscipline(fit: CompanyFit): CompanyFit {
     capability_matches: matches,
     evidence_basis,
     evidence_adjustment: notes.length > 0 ? notes.join(' ') : null,
+  };
+}
+
+/** A prospect scored on inference alone (title, seniority, decision authority) cannot exceed this. */
+export const PROSPECT_INFERRED_ONLY_CEILING = 55;
+
+/**
+ * Enforce evidence discipline on prospect fit, in code.
+ *
+ * The company-fit gate above exists because "financial services, therefore
+ * KYC" is a guess, not a finding. The identical guess exists on the person
+ * side and was, until this function, uncaught: "Chief Executive, therefore
+ * ultimate decision authority, therefore an elite target" reasons from TITLE
+ * to RELEVANCE with no step in between that touches evidence. A CEO's
+ * decision authority is real; it is not proof they personally own accounts
+ * payable, KYC, or whatever workflow the product addresses. Seniority answers
+ * "could this person approve a purchase" — it does not answer "does this
+ * person's remit touch the problem", and only the second question is what
+ * product_relevance is supposed to measure.
+ *
+ * `fit.evidence` at this point has already been through verifyEvidence() in
+ * qualify.ts: an item only survives if its URL was genuinely retrieved AND
+ * its quote actually appears in that source's content. A citation that is
+ * real but irrelevant — e.g. a generic bio page or a paywalled article with
+ * no substantive content — cannot produce a verified quote and is dropped
+ * here, exactly the failure mode this function exists to catch.
+ *
+ * One cap, one-directional (it can only lower a score): a prospect whose
+ * product_relevance rests on no verified evidence tying THEM SPECIFICALLY to
+ * the workflow cannot exceed PROSPECT_INFERRED_ONLY_CEILING, however senior
+ * they are, however confidently the model asserts otherwise, or however many
+ * real-but-unrelated URLs it attaches.
+ */
+export function applyProspectEvidenceDiscipline(fit: ProspectFit): ProspectFit {
+  const notes: string[] = [];
+
+  const hasEvidence = (fit.evidence ?? []).length > 0;
+  // An OBSERVED claim with nothing verified is exactly as trustworthy as an
+  // INFERRED one — the label without a confirmed citation is just an assertion.
+  const evidence_basis: EvidenceBasis =
+    hasEvidence ? fit.evidence_basis : fit.evidence_basis === 'OBSERVED' ? 'INFERRED' : fit.evidence_basis;
+
+  if (fit.evidence_basis === 'OBSERVED' && !hasEvidence) {
+    notes.push(
+      'Product relevance was reported as observed but no cited source could be verified to actually support the claim, so it was downgraded to inferred.',
+    );
+  }
+
+  let score = fit.score;
+  let classification = fit.classification;
+
+  if (evidence_basis !== 'OBSERVED' && score > PROSPECT_INFERRED_ONLY_CEILING) {
+    notes.push(
+      `No evidence ties this person specifically to the qualified workflow, so prospect fit was capped at ${PROSPECT_INFERRED_ONLY_CEILING}. Seniority and decision authority describe the role, not functional ownership.`,
+    );
+    score = PROSPECT_INFERRED_ONLY_CEILING;
+  }
+
+  // Keep the label consistent with the adjusted score.
+  if (classification === 'HIGH' && score <= PROSPECT_INFERRED_ONLY_CEILING) {
+    classification = evidence_basis === 'UNKNOWN' ? 'UNKNOWN' : 'MEDIUM';
+  }
+
+  return {
+    ...fit,
+    score,
+    classification,
+    evidence_basis,
+    relevance_reason:
+      notes.length > 0 ? `${fit.relevance_reason} ${notes.join(' ')}`.trim() : fit.relevance_reason,
   };
 }
 
@@ -222,6 +325,27 @@ export function combineQualification(
         'Company fit rests on inference from context rather than an observed workflow. No retrieved source shows the operations this product would serve, so the target is held for a human rather than pitched.',
       proceed: false,
       suggestion: null,
+    };
+  }
+
+  // Symmetric with the company check above: decision authority and seniority
+  // can make a person a PLAUSIBLE target without any source tying them to the
+  // workflow itself. Above the floor is not the same as evidenced — a
+  // capped-but-still-passable score must not silently combine into QUALIFIED
+  // just because it cleared the numeric bar.
+  if (prospect.evidence_basis === 'INFERRED') {
+    return {
+      overall_fit: overall,
+      classification: 'BORDERLINE',
+      reason:
+        'Prospect fit rests on seniority and decision authority rather than an observed link between this person and the qualified workflow. No retrieved source ties them to it, so the target is held for a human rather than pitched.',
+      proceed: false,
+      // The company side is fine here — genuinely OBSERVED, not weak. The
+      // open question is entirely "is this the right person", which is
+      // exactly what points at finding a different, better-evidenced contact
+      // rather than simply declining the account.
+      suggestion:
+        'The company looks like a plausible fit, but this person does not appear to own or influence the relevant workflows. Consider identifying a functional owner or decision-maker there instead.',
     };
   }
 

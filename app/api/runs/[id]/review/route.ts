@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getDraft, updateDraft, updateRun } from '@/lib/supabase/queries';
+import { requireOwnedRun } from '@/lib/auth/guard';
 
 export const runtime = 'nodejs';
 
@@ -11,6 +12,10 @@ export const runtime = 'nodejs';
  */
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+
+  // Authorize before reading or mutating anything belonging to this run.
+  const access = await requireOwnedRun(id);
+  if ('response' in access) return access.response;
 
   let body: { action?: string; edited_text?: string };
   try {

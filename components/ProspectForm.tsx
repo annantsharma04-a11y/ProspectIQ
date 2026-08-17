@@ -1,11 +1,21 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { parseLinkedInUrl } from '@/lib/linkedin/url';
 
 const FIELD =
   'mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500';
+
+interface ExistingProspect {
+  found: true;
+  /** The slug this answer was fetched for; guards against stale responses. */
+  slug: string;
+  prospect: { id: string; name: string | null; current_company: string | null; linkedin_slug: string };
+  run_count: number;
+  days_since_research: number | null;
+}
 
 export function ProspectForm() {
   const router = useRouter();
@@ -13,10 +23,41 @@ export function ProspectForm() {
   const [senderName, setSenderName] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [existing, setExisting] = useState<ExistingProspect | null>(null);
 
   // Same parser the server uses, so the user sees the problem before submitting.
   const clientError = url.trim() ? (parseLinkedInUrl(url).ok ? null : parseLinkedInUrl(url)) : null;
   const inlineError = clientError && !clientError.ok ? clientError.error : null;
+
+  // Tell the user BEFORE they submit that this person already has history, so a
+  // repeat submission is a deliberate re-research rather than a surprise.
+  const parsed = parseLinkedInUrl(url);
+  const slug = parsed.ok ? parsed.slug : null;
+
+  useEffect(() => {
+    if (!slug) return;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/prospects/lookup?linkedin_url=${encodeURIComponent(url.trim())}`);
+        if (!res.ok) return;
+        const body = await res.json();
+        // Tag the result with the slug it answered for, so a slow response for
+        // a URL the user has already edited away cannot overwrite a newer one.
+        if (!cancelled) setExisting(body.found ? { ...(body as ExistingProspect), slug } : null);
+      } catch {
+        // A failed lookup is not worth interrupting the form for.
+      }
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [slug, url]);
+
+  // Derived rather than cleared in an effect: an empty or invalid URL simply
+  // has nothing to show, and a stale answer for a previous URL is ignored.
+  const existingForUrl = slug && existing?.slug === slug ? existing : null;
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -67,6 +108,35 @@ export function ProspectForm() {
           className={FIELD}
         />
         {inlineError && <p className="mt-1 text-xs text-amber-600">{inlineError}</p>}
+
+        {existingForUrl && (
+          <div className="mt-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2.5">
+            <p className="text-xs font-semibold text-indigo-900">Existing prospect found</p>
+            <p className="mt-0.5 text-sm text-indigo-900">
+              {existingForUrl.prospect.name ?? `/in/${existingForUrl.prospect.linkedin_slug}`}
+              {existingForUrl.prospect.current_company && (
+                <span className="text-indigo-700"> · {existingForUrl.prospect.current_company}</span>
+              )}
+            </p>
+            <p className="mt-0.5 text-xs text-indigo-700">
+              {existingForUrl.run_count} {existingForUrl.run_count === 1 ? 'run' : 'runs'} on record ·{' '}
+              {existingForUrl.days_since_research == null
+                ? 'never completed'
+                : existingForUrl.days_since_research === 0
+                  ? 'researched today'
+                  : `last researched ${existingForUrl.days_since_research} day${existingForUrl.days_since_research === 1 ? '' : 's'} ago`}
+            </p>
+            <p className="mt-1.5 text-xs text-indigo-700">
+              Submitting adds a new run to this prospect — earlier runs are kept.{' '}
+              <Link
+                href={`/prospects/${existingForUrl.prospect.id}`}
+                className="font-medium underline hover:text-indigo-900"
+              >
+                View history
+              </Link>
+            </p>
+          </div>
+        )}
       </div>
 
       <div>
@@ -115,7 +185,7 @@ export function ProspectForm() {
         disabled={submitting || Boolean(inlineError) || !senderName.trim()}
         className="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
       >
-        {submitting ? 'Starting research…' : 'Analyze prospect'}
+        {submitting ? 'Starting research…' : existingForUrl ? 'Research again' : 'Analyze prospect'}
       </button>
 
       <p className="text-xs leading-relaxed text-slate-500">

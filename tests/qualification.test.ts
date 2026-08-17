@@ -2,12 +2,15 @@ import { describe, it, expect } from 'vitest';
 import {
   combineQualification,
   applyEvidenceDiscipline,
+  applyProspectEvidenceDiscipline,
   PROSPECT_FIT_FLOOR,
   COMPANY_FIT_FLOOR,
   INFERRED_ONLY_CEILING,
   UNEVIDENCED_MATCH_CEILING,
+  PROSPECT_INFERRED_ONLY_CEILING,
   type CapabilityMatch,
   type CompanyFit,
+  type EvidenceItem,
   type ProspectFit,
 } from '@/lib/qualification/types';
 import { deriveOutreachStatus } from '@/lib/qualification/outreach-status';
@@ -15,6 +18,9 @@ import type { RunRow } from '@/lib/types';
 import { getSenderCapabilities, renderCapabilities } from '@/lib/generation/sender';
 import { qualifyHook, gateHook, scoreSignals } from '@/lib/ranking/rank';
 import { signal, source } from './helpers';
+
+/** A verified evidence item — the discipline functions only look at `.length`, so the quote content is arbitrary here. */
+const ev = (url: string, quote = 'A verified verbatim excerpt supporting the claim.'): EvidenceItem => ({ url, quote });
 
 const prospect = (over: Partial<ProspectFit> = {}): ProspectFit => ({
   score: 80,
@@ -27,6 +33,8 @@ const prospect = (over: Partial<ProspectFit> = {}): ProspectFit => ({
   why_this_person: ['Owns AP and reconciliation.'],
   why_not_this_person: [],
   missing_information: [],
+  evidence_basis: 'OBSERVED',
+  evidence: [ev('https://example.com/prospect-evidence')],
   ...over,
 });
 
@@ -42,7 +50,7 @@ const company = (over: Partial<CompanyFit> = {}): CompanyFit => ({
       capability_name: 'Accounts payable automation',
       company_signal: 'High vendor-payment volume across multiple entities.',
       fit_strength: 80,
-      evidence: ['https://example.com/report'],
+      evidence: [ev('https://example.com/report')],
       basis: 'OBSERVED',
       reason: 'Multi-entity operations imply meaningful invoice volume.',
     },
@@ -51,7 +59,7 @@ const company = (over: Partial<CompanyFit> = {}): CompanyFit => ({
     {
       reason: 'Public information indicates a plausible AP automation use case.',
       basis: 'OBSERVED',
-      evidence: ['https://example.com/report'],
+      evidence: [ev('https://example.com/report')],
     },
   ],
   missing_information: [],
@@ -286,7 +294,7 @@ describe('company fit is evidence-driven, not industry-driven', () => {
     capability_name: 'KYC / KYB onboarding and compliance',
     company_signal: 'Regulated platform verifying customers at onboarding.',
     fit_strength: 90,
-    evidence: ['https://example.com/compliance-page'],
+    evidence: [ev('https://example.com/compliance-page')],
     basis: 'OBSERVED',
     reason: 'Public information indicates substantial identity/compliance workflows.',
     ...over,
@@ -336,7 +344,7 @@ describe('company fit is evidence-driven, not industry-driven', () => {
             capability_name: 'Accounts payable automation',
             company_signal: 'Documented shared-services centre processing supplier invoices across regions.',
             basis: 'OBSERVED',
-            evidence: ['https://example.com/shared-services'],
+            evidence: [ev('https://example.com/shared-services')],
             fit_strength: 78,
           }),
         ],
@@ -385,14 +393,14 @@ describe('company fit is evidence-driven, not industry-driven', () => {
 
     expect(adjusted.capability_matches[0].basis).toBe('INFERRED');
     expect(adjusted.capability_matches[0].fit_strength).toBeLessThanOrEqual(UNEVIDENCED_MATCH_CEILING);
-    expect(adjusted.evidence_adjustment).toMatch(/cited no source/i);
+    expect(adjusted.evidence_adjustment).toMatch(/no cited source could be verified/i);
   });
 
   it('every match that keeps a high strength carries supporting evidence', () => {
     const adjusted = applyEvidenceDiscipline(
       company({
         capability_matches: [
-          match({ fit_strength: 90, evidence: ['https://example.com/a'] }),
+          match({ fit_strength: 90, evidence: [ev('https://example.com/a')] }),
           match({ capability_id: 'ap_automation', fit_strength: 90, evidence: [], basis: 'INFERRED' }),
         ],
       }),
@@ -410,6 +418,231 @@ describe('company fit is evidence-driven, not industry-driven', () => {
     const low = applyEvidenceDiscipline(company({ score: 30, classification: 'LOW' }));
     expect(low.score).toBe(30);
     expect(low.classification).toBe('LOW');
+  });
+});
+
+// ─── regression: seniority alone must not qualify a prospect ────────────────
+//
+// A live retry of the same run (same person, same company, same evidence set)
+// swung from prospect_fit 35/LOW to 90/HIGH between two model calls. The
+// stored reasoning for the 90 case was: "As chief executive... she holds
+// ultimate strategic and financial decision authority, making her an elite
+// target" plus fabricated, uncited claims ("publicly champions AI-driven
+// roadmaps", "background in investment banking provides direct appreciation
+// for automated financial workflows"). Nothing caught it because ProspectFit
+// had no evidence/citation mechanism at all — company_fit has had one
+// (applyEvidenceDiscipline) since qualification was built; prospect_fit did
+// not. This block is the missing half of that gate.
+
+describe('prospect fit is evidence-driven, not seniority-driven', () => {
+  it('a CEO with decision authority but no workflow evidence cannot score HIGH', () => {
+    // The exact shape of the regression: HIGH decision authority, HIGH
+    // product_relevance asserted from title/background alone, nothing cited.
+    const raw = prospect({
+      score: 90,
+      classification: 'HIGH',
+      role: 'Founder, Chairperson and CEO',
+      seniority: 'C-suite',
+      decision_authority: 'HIGH',
+      product_relevance: 'HIGH',
+      relevance_reason:
+        'As chief executive of a multi-billion dollar omnichannel retail enterprise, she holds ultimate strategic and financial decision authority, making her an elite target for high-value enterprise finance and operational AI tooling.',
+      why_this_person: [
+        'Ultimate decision-making authority for enterprise technology and operational investments.',
+        'Publicly champions AI-driven organizational roadmaps, efficiency, and digital transformation.',
+        'Strong background in finance and investment banking provides direct appreciation for automated financial workflows.',
+      ],
+      evidence_basis: 'INFERRED',
+      evidence: [],
+    });
+
+    const adjusted = applyProspectEvidenceDiscipline(raw);
+
+    expect(adjusted.score).toBeLessThanOrEqual(PROSPECT_INFERRED_ONLY_CEILING);
+    expect(adjusted.classification).not.toBe('HIGH');
+    expect(adjusted.evidence_basis).toBe('INFERRED');
+    // And decision authority alone therefore cannot carry a qualification.
+    expect(combineQualification(adjusted, company()).classification).not.toBe('QUALIFIED');
+  });
+
+  it('the same person, with genuine functional-ownership evidence, CAN score HIGH', () => {
+    // Not a CEO blacklist: evidence is what flips the decision either way.
+    const raw = prospect({
+      score: 88,
+      classification: 'HIGH',
+      role: 'VP Finance',
+      seniority: 'VP',
+      decision_authority: 'HIGH',
+      product_relevance: 'HIGH',
+      relevance_reason: 'Publicly described as owning the accounts payable and vendor payment function.',
+      why_this_person: ['Quoted discussing the company’s invoice processing volume and AP team.'],
+      evidence_basis: 'OBSERVED',
+      evidence: [ev('https://example.com/vp-finance-interview')],
+    });
+
+    const adjusted = applyProspectEvidenceDiscipline(raw);
+
+    expect(adjusted.score).toBe(88);
+    expect(adjusted.classification).toBe('HIGH');
+    expect(adjusted.evidence_basis).toBe('OBSERVED');
+    expect(combineQualification(adjusted, company()).proceed).toBe(true);
+  });
+
+  it('an OBSERVED claim with no cited source is downgraded, not trusted', () => {
+    // Mirrors the identical company-side check: the label alone is not proof.
+    const adjusted = applyProspectEvidenceDiscipline(
+      prospect({ score: 92, classification: 'HIGH', evidence_basis: 'OBSERVED', evidence: [] }),
+    );
+    expect(adjusted.evidence_basis).toBe('INFERRED');
+    expect(adjusted.score).toBeLessThanOrEqual(PROSPECT_INFERRED_ONLY_CEILING);
+    expect(adjusted.relevance_reason).toMatch(/no cited source could be verified/i);
+  });
+
+  it('an UNKNOWN basis is also capped, not treated as a pass', () => {
+    const adjusted = applyProspectEvidenceDiscipline(
+      prospect({ score: 70, classification: 'MEDIUM', evidence_basis: 'UNKNOWN', evidence: [] }),
+    );
+    expect(adjusted.evidence_basis).toBe('UNKNOWN');
+    expect(adjusted.score).toBeLessThanOrEqual(PROSPECT_INFERRED_ONLY_CEILING);
+  });
+
+  it('never raises a score — the cap is one-directional', () => {
+    const low = applyProspectEvidenceDiscipline(
+      prospect({ score: 20, classification: 'LOW', evidence_basis: 'INFERRED', evidence: [] }),
+    );
+    expect(low.score).toBe(20);
+    expect(low.classification).toBe('LOW');
+  });
+
+  it('decision authority and evidence basis are independent questions', () => {
+    // A HIGH-authority person with no evidence is capped; a LOW-authority
+    // person with genuine evidence is not penalised for lacking a title.
+    const executive = applyProspectEvidenceDiscipline(
+      prospect({ score: 85, classification: 'HIGH', decision_authority: 'HIGH', evidence_basis: 'INFERRED', evidence: [] }),
+    );
+    const individualContributor = applyProspectEvidenceDiscipline(
+      prospect({
+        score: 75,
+        classification: 'HIGH',
+        decision_authority: 'LOW',
+        evidence_basis: 'OBSERVED',
+        evidence: [ev('https://example.com/quote')],
+      }),
+    );
+    expect(executive.score).toBeLessThanOrEqual(PROSPECT_INFERRED_ONLY_CEILING);
+    expect(individualContributor.score).toBe(75);
+  });
+});
+
+// ─── regression: BORDERLINE-from-inference must still offer another contact ─
+//
+// The Ritesh/PRISM run: company_fit 82/HIGH/OBSERVED (genuinely evidenced —
+// AP automation and chargebacks both cited to real sources), prospect_fit
+// capped to 55/MEDIUM/INFERRED by the discipline above (decision authority
+// from being CEO, no source tying him to the workflow). combineQualification
+// correctly landed BORDERLINE — but set suggestion: null, so
+// findContactCandidatesStage's trigger (`!q.proceed && q.suggestion`) never
+// fired and the UI never offered another contact at a company that plainly
+// qualified. This is the missing wire, not a scoring change: score,
+// classification and reason are asserted UNCHANGED below.
+
+describe('a qualified company with an inference-only contact still offers another contact', () => {
+  const prismCompany = (): CompanyFit =>
+    company({
+      score: 82,
+      classification: 'HIGH',
+      industry: 'Hospitality & Travel Technology',
+      evidence_basis: 'OBSERVED',
+      capability_matches: [
+        {
+          capability_id: 'ap_automation',
+          capability_name: 'Accounts Payable Automation',
+          company_signal: 'Large global portfolio generating high-volume vendor and payout workflows.',
+          fit_strength: 90,
+          evidence: [ev('https://example.com/prism-leadership')],
+          basis: 'OBSERVED',
+          reason: 'High-volume invoice processing and vendor payouts across a large portfolio.',
+        },
+      ],
+    });
+
+  const inferredOnlyCeo = (): ProspectFit =>
+    prospect({
+      score: 55,
+      classification: 'MEDIUM',
+      role: 'Founder and CEO',
+      decision_authority: 'HIGH',
+      product_relevance: 'MEDIUM',
+      evidence_basis: 'INFERRED',
+      evidence: [],
+      relevance_reason:
+        'Prospect fit rests on seniority and decision authority rather than an observed link between this person and the qualified workflow.',
+    });
+
+  it('sets a suggestion, so the exact scoring outcome is unchanged but no longer silent', () => {
+    const r = combineQualification(inferredOnlyCeo(), prismCompany());
+
+    // Scoring is untouched — this is the regression's own before/after.
+    expect(r.classification).toBe('BORDERLINE');
+    expect(r.proceed).toBe(false);
+    expect(r.overall_fit).toBe(55);
+    expect(r.reason).toMatch(/seniority and decision authority/i);
+
+    // What was missing: a company this solid must point at another contact.
+    expect(r.suggestion).not.toBeNull();
+    expect(r.suggestion).toMatch(/functional owner|decision-maker/i);
+  });
+
+  it('the discovery trigger predicate now fires for this exact state', () => {
+    const r = combineQualification(inferredOnlyCeo(), prismCompany());
+    // Mirrors findContactCandidatesStage's own condition exactly.
+    const applicable = Boolean(r && !r.proceed && r.suggestion);
+    expect(applicable).toBe(true);
+  });
+
+  it('does NOT fire when the company itself is only inferred', () => {
+    // The open question there is the COMPANY, not which contact to use —
+    // finding a different person at an unevidenced account fixes nothing.
+    const uncertainCompany = applyEvidenceDiscipline(
+      company({
+        score: 92,
+        classification: 'HIGH',
+        capability_matches: [
+          { capability_id: 'ap_automation', capability_name: 'AP', company_signal: 'x', fit_strength: 70, evidence: [], basis: 'INFERRED', reason: 'x' },
+        ],
+      }),
+    );
+    const r = combineQualification(inferredOnlyCeo(), uncertainCompany);
+    expect(r.classification).toBe('BORDERLINE');
+    expect(r.suggestion).toBeNull();
+    expect(Boolean(r && !r.proceed && r.suggestion)).toBe(false);
+  });
+
+  it('does NOT fire when the company did not qualify', () => {
+    const r = combineQualification(inferredOnlyCeo(), company({ score: 20, classification: 'LOW' }));
+    expect(r.classification).toBe('NOT_QUALIFIED');
+    expect(r.suggestion).toBeNull();
+  });
+
+  it('does NOT fire when relevance is UNKNOWN rather than inferred', () => {
+    // "Insufficient evidence to tell" is a different, more uncertain state
+    // than "evidence points at inference only" — both sides must be at least
+    // assessed before pointing a user at a specific alternative contact.
+    const r = combineQualification(
+      // Above PROSPECT_FIT_FLOOR so this exercises the UNKNOWN branch
+      // specifically, not the "score too low" branch above it.
+      prospect({ score: 50, classification: 'UNKNOWN', evidence_basis: 'UNKNOWN', evidence: [] }),
+      prismCompany(),
+    );
+    expect(r.classification).toBe('BORDERLINE');
+    expect(r.suggestion).toBeNull();
+  });
+
+  it('still does not fire once the prospect is genuinely qualified', () => {
+    const r = combineQualification(prospect(), prismCompany());
+    expect(r.classification).toBe('QUALIFIED');
+    expect(r.proceed).toBe(true);
+    expect(r.suggestion).toBeNull();
   });
 });
 
@@ -472,7 +705,7 @@ describe('hook must align with the evidence that qualified the company', () => {
             capability_name: 'KYC / KYB onboarding and compliance',
             company_signal: 'Regulated brokerage verifying customers at account opening.',
             fit_strength: 85,
-            evidence: ['https://example.com/zerodha-compliance'],
+            evidence: [ev('https://example.com/zerodha-compliance')],
             basis: 'OBSERVED',
             reason: 'Public information indicates substantial identity/compliance workflows.',
           },

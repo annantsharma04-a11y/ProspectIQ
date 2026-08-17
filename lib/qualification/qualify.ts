@@ -11,7 +11,14 @@ import { renderProfile, type LinkedInProfile } from '@/lib/linkedin/profile';
 import { renderSources } from '@/lib/llm/analyze';
 import type { NormalizedSource } from '@/lib/research/normalize';
 import { renderCapabilities, type SenderConfig } from '@/lib/generation/sender';
-import { applyEvidenceDiscipline, type CompanyFit, type EvidenceBasis, type ProspectFit } from './types';
+import {
+  applyEvidenceDiscipline,
+  applyProspectEvidenceDiscipline,
+  type CompanyFit,
+  type EvidenceBasis,
+  type ProspectFit,
+} from './types';
+import { verifyEvidence, type RawEvidenceItem } from './verify';
 
 const SYSTEM = `You qualify sales targets. You decide whether a seller should be
 talking to THIS person about THIS product at THIS company — before anyone writes
@@ -27,12 +34,44 @@ PROSPECT FIT — is this person a meaningful target?
     unless the evidence shows they directly own the relevant workflow.
   - Managers and Directors depend on function: finance/operations/compliance
     ownership matters far more than the seniority word in the title.
-  - VP/Head/CXO/Founder are often HIGH, but only when their remit plausibly
-    touches the product's area.
+  - VP/Head/CXO/Founder are often plausible targets by role, but seniority is
+    NOT evidence of functional relevance. A CEO holds ultimate decision
+    authority over everything and personally owns almost nothing operational —
+    "chief executive, therefore an elite target for [workflow]" is the same
+    guess as "fintech, therefore KYC" on the company side, and is banned for
+    the same reason.
   - Do not rely on the title alone. Use responsibilities, department, company
     context and anything public they have said.
   - Someone in an unrelated function (recruiting, design, facilities) at a great
     company is still a LOW prospect unless evidence shows relevant influence.
+
+  PRODUCT RELEVANCE EVIDENCE — reason in this order, every time:
+      person → their actual remit or stated activity → does it touch the
+      qualified workflow → product_relevance
+  NEVER reason: seniority → assumed influence → product_relevance.
+
+  Set evidence_basis for product_relevance:
+      OBSERVED — a supplied source ties THIS SPECIFIC PERSON to the qualified
+                 workflow: their own stated responsibilities, something they
+                 said or did publicly, or a source describing their remit.
+                 For each such source, add an entry to evidence with the URL
+                 AND a short quote copied VERBATIM from that source's text
+                 that itself shows the connection to the workflow — not a
+                 quote that merely confirms their name or title. A bio page
+                 or an article ABOUT the person that never mentions the
+                 workflow does not qualify, even if it is a real, relevant-
+                 looking source about them.
+      INFERRED — plausible from title, seniority or decision authority alone,
+                 with no source tying this individual to the workflow itself.
+                 evidence may be empty.
+      UNKNOWN  — you cannot tell.
+  Decision authority and seniority may be HIGH while evidence_basis is still
+  INFERRED — those are different questions. "Could approve a purchase" is not
+  "personally touches this workflow". Every evidence quote is checked
+  mechanically against the source's actual retrieved text: a quote that is
+  paraphrased, invented, or copied from a different source is rejected and
+  does not count, and product_relevance with no surviving verified evidence
+  will be capped automatically downstream, however senior the person is.
 
 COMPANY FIT — does the EVIDENCE show workflows this product would serve?
   Reason in this order, every time:
@@ -51,16 +90,21 @@ COMPANY FIT — does the EVIDENCE show workflows this product would serve?
   the supplied sources count as observed.
 
 CAPABILITY MAPPING
-  For each capability, state the workflow you actually saw, cite the source URLs
-  that show it, and label how you arrived at it:
+  For each capability, state the workflow you actually saw, and label how you
+  arrived at it:
       OBSERVED — a supplied source describes this workflow or operational context
-                 at this company. Cite the URL(s) in evidence.
+                 at this company. For each such source, add an entry to evidence
+                 with the URL AND a short quote copied VERBATIM from that
+                 source's text that itself describes the workflow — not just a
+                 quote naming the company.
       INFERRED — plausible from context (including industry) but no source
                  confirms it for this company. evidence may be empty.
       UNKNOWN  — you cannot tell.
-  Be honest with these labels: an OBSERVED match with no cited source will be
-  downgraded automatically, and a company with nothing observed cannot score
-  highly however obvious its sector seems.
+  Be honest with these labels: every evidence quote is checked mechanically
+  against the source's actual retrieved text, so an OBSERVED match whose quote
+  does not genuinely appear in the cited source will be downgraded
+  automatically, and a company with nothing verified cannot score highly
+  however obvious its sector seems.
   You may ONLY reason about the capabilities listed. Never invent products,
   features, customers or integrations.
 
@@ -95,8 +139,36 @@ const SCHEMA: JsonSchema = {
         why_this_person: { type: 'array', items: { type: 'string' } },
         why_not_this_person: { type: 'array', items: { type: 'string' } },
         missing_information: { type: 'array', items: { type: 'string' } },
+        evidence_basis: {
+          type: 'string',
+          enum: ['OBSERVED', 'INFERRED', 'UNKNOWN'],
+          description: 'How product_relevance was arrived at. See PRODUCT RELEVANCE EVIDENCE above.',
+        },
+        evidence: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              url: { type: 'string' },
+              quote: {
+                type: 'string',
+                description: 'Verbatim excerpt from that URL, copied exactly, showing THIS person tied to the workflow.',
+              },
+            },
+            required: ['url', 'quote'],
+          },
+          description:
+            'Evidence tying THIS person to the qualified workflow. Required when evidence_basis is OBSERVED. Each quote is checked mechanically against the source; a quote that does not verify does not count.',
+        },
       },
-      required: ['score', 'classification', 'relevance_reason', 'decision_authority', 'product_relevance'],
+      required: [
+        'score',
+        'classification',
+        'relevance_reason',
+        'decision_authority',
+        'product_relevance',
+        'evidence_basis',
+      ],
     },
     company_fit: {
       type: 'object',
@@ -120,8 +192,18 @@ const SCHEMA: JsonSchema = {
               fit_strength: { type: 'integer' },
               evidence: {
                 type: 'array',
-                items: { type: 'string' },
-                description: 'Source URLs showing the workflow. Required when basis is OBSERVED.',
+                items: {
+                  type: 'object',
+                  properties: {
+                    url: { type: 'string' },
+                    quote: {
+                      type: 'string',
+                      description: 'Verbatim excerpt from that URL, copied exactly, describing the workflow.',
+                    },
+                  },
+                  required: ['url', 'quote'],
+                },
+                description: 'Evidence showing the workflow. Required when basis is OBSERVED. Each quote is checked mechanically against the source.',
               },
               basis: { type: 'string', enum: ['OBSERVED', 'INFERRED', 'UNKNOWN'] },
               reason: { type: 'string' },
@@ -136,7 +218,17 @@ const SCHEMA: JsonSchema = {
             properties: {
               reason: { type: 'string' },
               basis: { type: 'string', enum: ['OBSERVED', 'INFERRED', 'UNKNOWN'] },
-              evidence: { type: 'array', items: { type: 'string' } },
+              evidence: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    url: { type: 'string' },
+                    quote: { type: 'string' },
+                  },
+                  required: ['url', 'quote'],
+                },
+              },
             },
             required: ['reason', 'basis'],
           },
@@ -194,8 +286,13 @@ ${renderSources(input.sources, 2500)}
 Assess prospect fit and company fit.`;
 
   const { data, meta } = await callStructured<{
-    prospect_fit: ProspectFit;
-    company_fit: CompanyFit;
+    prospect_fit: Omit<ProspectFit, 'evidence'> & { evidence?: RawEvidenceItem[] | null };
+    company_fit: Omit<CompanyFit, 'capability_matches' | 'fit_reasons'> & {
+      capability_matches?: (Omit<CompanyFit['capability_matches'][number], 'evidence'> & {
+        evidence?: RawEvidenceItem[] | null;
+      })[];
+      fit_reasons?: (Omit<CompanyFit['fit_reasons'][number], 'evidence'> & { evidence?: RawEvidenceItem[] | null })[];
+    };
   }>({
     purpose: 'qualify_target',
     system: SYSTEM,
@@ -205,14 +302,13 @@ Assess prospect fit and company fit.`;
   });
 
   const allowedIds = new Set(input.sender.capabilities.map((c) => c.id));
-  // A citation only counts if it points at a source this run actually retrieved.
-  const retrievedUrls = new Set<string>();
-  for (const src of input.sources) {
-    retrievedUrls.add(src.url);
-    retrievedUrls.add(src.canonical_url);
-  }
 
-  const prospect_fit: ProspectFit = {
+  const basis = (v: unknown): EvidenceBasis => {
+    const x = String(v ?? '').toUpperCase();
+    return x === 'OBSERVED' || x === 'INFERRED' ? x : 'UNKNOWN';
+  };
+
+  const prospect_fit_raw: ProspectFit = {
     score: clamp(data.prospect_fit?.score),
     classification: classify(data.prospect_fit?.classification),
     role: data.prospect_fit?.role ?? input.role,
@@ -223,12 +319,17 @@ Assess prospect fit and company fit.`;
     why_this_person: data.prospect_fit?.why_this_person ?? [],
     why_not_this_person: data.prospect_fit?.why_not_this_person ?? [],
     missing_information: data.prospect_fit?.missing_information ?? [],
+    evidence_basis: basis(data.prospect_fit?.evidence_basis),
+    // Only evidence whose URL was genuinely retrieved AND whose quote
+    // genuinely appears in that source's content counts — a real-but-
+    // unrelated URL (a generic bio, a paywalled article) is not evidence.
+    evidence: verifyEvidence(data.prospect_fit?.evidence, input.sources),
   };
 
-  const basis = (v: unknown): EvidenceBasis => {
-    const x = String(v ?? '').toUpperCase();
-    return x === 'OBSERVED' || x === 'INFERRED' ? x : 'UNKNOWN';
-  };
+  // Seniority and decision authority describe the role, not functional
+  // ownership — enforced in code, the same way industry alone cannot produce a
+  // high company score.
+  const prospect_fit = applyProspectEvidenceDiscipline(prospect_fit_raw);
 
   const company_fit_raw: CompanyFit = {
     score: clamp(data.company_fit?.score),
@@ -244,15 +345,14 @@ Assess prospect fit and company fit.`;
         capability_name: m.capability_name,
         company_signal: m.company_signal,
         fit_strength: clamp(m.fit_strength),
-        // Only URLs we actually retrieved count as evidence.
-        evidence: (m.evidence ?? []).filter((url) => retrievedUrls.has(url)),
+        evidence: verifyEvidence(m.evidence, input.sources),
         basis: basis(m.basis),
         reason: m.reason ?? '',
       })),
     fit_reasons: (data.company_fit?.fit_reasons ?? []).map((r) => ({
       reason: r.reason,
       basis: basis(r.basis),
-      evidence: (r.evidence ?? []).filter((url) => retrievedUrls.has(url)),
+      evidence: verifyEvidence(r.evidence, input.sources),
     })),
     missing_information: data.company_fit?.missing_information ?? [],
     evidence_basis: 'UNKNOWN',

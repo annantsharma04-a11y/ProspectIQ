@@ -11,7 +11,7 @@ export interface QuerySeed {
   title: string | null;
 }
 
-function quoted(value: string): string {
+export function quoted(value: string): string {
   return `"${value.replace(/"/g, '')}"`;
 }
 

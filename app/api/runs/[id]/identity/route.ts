@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { getRun, updateRun } from '@/lib/supabase/queries';
+import { updateRun } from '@/lib/supabase/queries';
+import { requireOwnedRun } from '@/lib/auth/guard';
 import { applyUserSelection } from '@/lib/identity/types';
 import { resumeAfterIdentity } from '@/lib/pipeline/execute';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -16,6 +17,10 @@ export const runtime = 'nodejs';
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
 
+  const access = await requireOwnedRun(id);
+  if ('response' in access) return access.response;
+  const { run } = access;
+
   let body: { candidate_id?: string };
   try {
     body = (await req.json()) as { candidate_id?: string };
@@ -28,8 +33,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return NextResponse.json({ error: 'candidate_id is required' }, { status: 400 });
   }
 
-  const run = await getRun(id);
-  if (!run) return NextResponse.json({ error: 'Run not found' }, { status: 404 });
   if (!run.identity_verification) {
     return NextResponse.json({ error: 'This run has no identity candidates to choose from.' }, { status: 400 });
   }

@@ -308,6 +308,8 @@ describe('11-14. identity failure is not qualification failure', () => {
       why_this_person: [],
       why_not_this_person: [],
       missing_information: [],
+      evidence_basis: 'UNKNOWN' as const,
+      evidence: [],
     };
     const companyFit = {
       score: 80,
@@ -316,7 +318,13 @@ describe('11-14. identity failure is not qualification failure', () => {
       company_size: '1000+',
       relevant_workflows: ['kyc'],
       capability_matches: [],
-      fit_reasons: [{ reason: 'Observed verification workflows.', basis: 'OBSERVED' as const, evidence: ['https://example.com/a'] }],
+      fit_reasons: [
+        {
+          reason: 'Observed verification workflows.',
+          basis: 'OBSERVED' as const,
+          evidence: [{ url: 'https://example.com/a', quote: 'Verified verification workflow excerpt.' }],
+        },
+      ],
       missing_information: [],
       evidence_basis: 'OBSERVED' as const,
       evidence_adjustment: null,

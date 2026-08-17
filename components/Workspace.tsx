@@ -57,7 +57,7 @@ export function Workspace({
         ) : (
           <EmptyPanel
             title="Live run"
-            body="Paste a public LinkedIn profile URL and the ten pipeline stages will report here as they execute."
+            body="Paste a public LinkedIn profile URL and the fifteen pipeline stages will report here as they execute."
           />
         )}
       </div>

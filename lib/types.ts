@@ -5,6 +5,7 @@ import type { SignalCategory } from '@/lib/signals/types';
 import type { LinkedInProfile, ProfileAccess } from '@/lib/linkedin/profile';
 import type { TargetQualification } from '@/lib/qualification/types';
 import type { IdentityVerification } from '@/lib/identity/types';
+import type { ContactCandidateRow } from '@/lib/contacts/types';
 
 export type RunStatus =
   | 'queued'
@@ -27,6 +28,7 @@ export const STAGE_ORDER = [
   'research_company',
   'qualify_prospect',
   'qualify_company',
+  'find_contact_candidates',
   'collect_signals',
   'evaluate_signals',
   'select_hook',
@@ -46,6 +48,7 @@ export const STAGE_LABELS: Record<StageName, string> = {
   research_company: 'Research company',
   qualify_prospect: 'Qualify prospect',
   qualify_company: 'Qualify company',
+  find_contact_candidates: 'Find contact candidates',
   collect_signals: 'Collect signals',
   evaluate_signals: 'Evaluate signals',
   select_hook: 'Select hook',
@@ -65,6 +68,18 @@ export interface RunRow {
   input_name: string | null;
   input_company: string | null;
   input_title: string | null;
+  /** Owner (Supabase Auth user). Null only for runs created before ownership. */
+  user_id: string | null;
+  /**
+   * The persistent prospect this run researched. Null only for runs that
+   * predate prospects and could not be safely associated.
+   */
+  prospect_id: string | null;
+  /**
+   * Set when this run exists because a human selected this person as an
+   * alternative contact discovered on another run. Null for every ordinary run.
+   */
+  origin_contact_candidate_id: string | null;
   /** Name to sign this run's outreach with; falls back to SENDER_NAME. */
   sender_name: string | null;
   prospect_name: string | null;
@@ -198,4 +213,6 @@ export interface RunSnapshot {
   signals: SignalRow[];
   sources: SourceRow[];
   draft: DraftRow | null;
+  /** Alternative contacts discovered when the company qualified but this person did not. Usually empty. */
+  contactCandidates: ContactCandidateRow[];
 }

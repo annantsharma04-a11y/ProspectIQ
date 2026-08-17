@@ -20,6 +20,7 @@ import type { ScoredSignal } from '@/lib/signals/types';
 import type { HookSelection } from '@/lib/ranking/rank';
 import type { ValidationResult } from '@/lib/validation/factcheck';
 import type { RunRow } from '@/lib/types';
+import type { VerifiedCandidate } from '@/lib/contacts/rank';
 
 export interface PipelineContext {
   runId: string;
@@ -64,6 +65,13 @@ export interface PipelineContext {
   /** True when the draft still read as generic after one regeneration. */
   messageFailedGate: boolean;
   validation: ValidationResult | null;
+
+  /**
+   * Alternative contacts at this company, when the company qualified but the
+   * submitted person did not. Populated only in that specific state; empty
+   * otherwise, including on every ordinary qualified or fully-unqualified run.
+   */
+  contactCandidates: VerifiedCandidate[] | null;
 }
 
 export function newContext(run: RunRow): PipelineContext {
@@ -93,6 +101,7 @@ export function newContext(run: RunRow): PipelineContext {
     draftId: null,
     messageFailedGate: false,
     validation: null,
+    contactCandidates: null,
   };
 }
 

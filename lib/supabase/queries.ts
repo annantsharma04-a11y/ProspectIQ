@@ -10,8 +10,166 @@ import type {
   StageName,
   StageStatus,
 } from '@/lib/types';
+import type { ProspectOverviewRow, ProspectRow } from '@/lib/prospects/types';
+import type { ContactCandidateRow } from '@/lib/contacts/types';
+import { countsAsResearched, identityPatchFromRun } from '@/lib/prospects/types';
 
 // Typed read/write helpers. All writes use the service-role client (server only).
+
+// ─── prospects ───────────────────────────────────────────────────────────────
+
+/**
+ * The prospect for this user and slug, creating it if it is new.
+ *
+ * The (user_id, linkedin_slug) unique index is what makes this safe under
+ * concurrency: two simultaneous submissions of the same URL race to insert, one
+ * wins, and the loser reads the winner's row instead of creating a duplicate.
+ */
+export async function findOrCreateProspect(input: {
+  user_id: string;
+  linkedin_slug: string;
+  linkedin_url: string;
+}): Promise<{ prospect: ProspectRow; created: boolean }> {
+  const supabase = createServiceClient();
+
+  const existing = await findProspectBySlug(input.user_id, input.linkedin_slug);
+  if (existing) return { prospect: existing, created: false };
+
+  const { data, error } = await supabase
+    .from('prospects')
+    .insert(input)
+    .select()
+    .single();
+
+  if (error) {
+    // 23505 = unique violation: someone else created it between our read and
+    // our write. Their row is just as good as ours.
+    if ((error as { code?: string }).code === '23505') {
+      const won = await findProspectBySlug(input.user_id, input.linkedin_slug);
+      if (won) return { prospect: won, created: false };
+    }
+    throw error;
+  }
+  return { prospect: data as ProspectRow, created: true };
+}
+
+export async function findProspectBySlug(
+  userId: string,
+  slug: string,
+): Promise<ProspectRow | null> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from('prospects')
+    .select()
+    .eq('user_id', userId)
+    .eq('linkedin_slug', slug)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as ProspectRow) ?? null;
+}
+
+export async function getProspect(prospectId: string): Promise<ProspectRow | null> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from('prospects')
+    .select()
+    .eq('id', prospectId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as ProspectRow) ?? null;
+}
+
+/**
+ * A user's prospects with their run rollup, newest research first.
+ *
+ * Reads the `prospect_overview` view so the run count and latest-run summary
+ * arrive in ONE query. Listing prospects and then querying runs per prospect
+ * would be an N+1 that grows with the history.
+ */
+export async function listProspects(
+  userId: string,
+  { limit = 50, offset = 0 }: { limit?: number; offset?: number } = {},
+): Promise<ProspectOverviewRow[]> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from('prospect_overview')
+    .select()
+    .eq('user_id', userId)
+    .order('last_researched_at', { ascending: false, nullsFirst: false })
+    .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1);
+  if (error) throw error;
+  return (data as ProspectOverviewRow[]) ?? [];
+}
+
+export async function countProspects(userId: string): Promise<number> {
+  const supabase = createServiceClient();
+  const { count, error } = await supabase
+    .from('prospects')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId);
+  if (error) throw error;
+  return count ?? 0;
+}
+
+/** A prospect's runs, newest first. Ownership is checked by the caller's guard. */
+export async function listProspectRuns(prospectId: string, limit = 100): Promise<RunRow[]> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from('runs')
+    .select()
+    .eq('prospect_id', prospectId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return (data as RunRow[]) ?? [];
+}
+
+/**
+ * Signals for several runs in one query, keyed by run.
+ *
+ * The prospect page needs signals for the timeline across N runs; fetching them
+ * per run would be the N+1 this avoids.
+ */
+export async function listSignalsForRuns(runIds: string[]): Promise<Record<string, SignalRow[]>> {
+  if (runIds.length === 0) return {};
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from('signals')
+    .select()
+    .in('run_id', runIds)
+    .order('composite_score', { ascending: false, nullsFirst: false });
+  if (error) throw error;
+
+  const byRun: Record<string, SignalRow[]> = {};
+  for (const row of (data as SignalRow[]) ?? []) {
+    (byRun[row.run_id] ??= []).push(row);
+  }
+  return byRun;
+}
+
+/**
+ * Push a finished run's identity back onto its prospect.
+ *
+ * Only non-null fields are written (see identityPatchFromRun), so a run that
+ * failed early cannot blank out what an earlier run established. The run itself
+ * is never modified — history stays immutable.
+ */
+export async function syncProspectFromRun(run: RunRow): Promise<void> {
+  if (!run.prospect_id) return;
+  const supabase = createServiceClient();
+
+  const patch: Record<string, unknown> = {
+    ...identityPatchFromRun(run),
+    updated_at: new Date().toISOString(),
+  };
+  if (countsAsResearched(run)) {
+    patch.last_researched_at = run.completed_at ?? new Date().toISOString();
+  }
+
+  const { error } = await supabase.from('prospects').update(patch).eq('id', run.prospect_id);
+  if (error) throw error;
+}
 
 // ─── runs ────────────────────────────────────────────────────────────────────
 
@@ -22,6 +180,12 @@ export async function createRun(input: {
   input_company: string | null;
   input_title: string | null;
   sender_name: string | null;
+  /** Owner of the run. Required — every new run belongs to someone. */
+  user_id: string;
+  /** The persistent prospect this run researches. */
+  prospect_id: string;
+  /** Set only when this run exists because a human selected a discovered contact candidate. */
+  origin_contact_candidate_id?: string | null;
 }): Promise<RunRow> {
   const supabase = createServiceClient();
   const { data, error } = await supabase
@@ -53,11 +217,18 @@ export async function getRun(runId: string): Promise<RunRow | null> {
   return (data as RunRow) ?? null;
 }
 
-export async function listRuns(limit = 100): Promise<RunRow[]> {
+/**
+ * Runs belonging to one user.
+ *
+ * userId is required: an unscoped listing would return every user's prospects,
+ * and the service-role client would happily comply.
+ */
+export async function listRuns(userId: string, limit = 100): Promise<RunRow[]> {
   const supabase = createServiceClient();
   const { data, error } = await supabase
     .from('runs')
     .select()
+    .eq('user_id', userId)
     .order('created_at', { ascending: false })
     .limit(limit);
   if (error) throw error;
@@ -266,4 +437,54 @@ export async function getDraft(runId: string): Promise<DraftRow | null> {
 export async function deleteDrafts(runId: string): Promise<void> {
   const supabase = createServiceClient();
   await supabase.from('drafts').delete().eq('run_id', runId);
+}
+
+// ─── contact candidates ──────────────────────────────────────────────────────
+
+export async function createContactCandidates(
+  runId: string,
+  candidates: Omit<ContactCandidateRow, 'id' | 'run_id' | 'identity_status' | 'identity_verification' | 'selected_at' | 'resulting_run_id' | 'created_at'>[],
+): Promise<ContactCandidateRow[]> {
+  if (candidates.length === 0) return [];
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from('contact_candidates')
+    .insert(candidates.map((c) => ({ ...c, run_id: runId })))
+    .select();
+  if (error) throw error;
+  return (data as ContactCandidateRow[]) ?? [];
+}
+
+/** A run's discovered candidates, best-ranked first. */
+export async function listContactCandidates(runId: string): Promise<ContactCandidateRow[]> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from('contact_candidates')
+    .select()
+    .eq('run_id', runId)
+    .order('rank_score', { ascending: false });
+  if (error) throw error;
+  return (data as ContactCandidateRow[]) ?? [];
+}
+
+export async function getContactCandidate(candidateId: string): Promise<ContactCandidateRow | null> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from('contact_candidates')
+    .select()
+    .eq('id', candidateId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as ContactCandidateRow) ?? null;
+}
+
+export async function updateContactCandidate(
+  candidateId: string,
+  patch: Partial<
+    Pick<ContactCandidateRow, 'identity_status' | 'identity_verification' | 'selected_at' | 'resulting_run_id'>
+  >,
+): Promise<void> {
+  const supabase = createServiceClient();
+  const { error } = await supabase.from('contact_candidates').update(patch).eq('id', candidateId);
+  if (error) throw error;
 }

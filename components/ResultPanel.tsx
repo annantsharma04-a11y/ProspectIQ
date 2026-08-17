@@ -5,6 +5,7 @@ import { SourceList } from './SourceList';
 import Link from 'next/link';
 import { DraftReviewCard } from './DraftReviewCard';
 import { IdentityCard } from './IdentityCard';
+import { ContactCandidates } from './ContactCandidates';
 import type { RunSnapshot } from '@/lib/types';
 import { deriveOutreachStatus, OUTREACH_LABEL } from '@/lib/qualification/outreach-status';
 
@@ -247,7 +248,7 @@ function QualificationCard({ snapshot }: { snapshot: RunSnapshot }) {
                       <span className="text-slate-400"> · {m.fit_strength}/100</span>
                       {m.evidence.length > 0 ? (
                         <a
-                          href={m.evidence[0]}
+                          href={m.evidence[0].url}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="ml-1 text-indigo-600 hover:underline"
@@ -451,6 +452,12 @@ export function ResultPanel({
 
       {/* Target qualification — shown before signals and hook */}
       <QualificationCard snapshot={snapshot} />
+
+      {/* Alternative contacts — only when the company qualified but this person
+          did not. Absent from every other run, including a fully unqualified one. */}
+      {run.qualification?.suggestion ? (
+        <ContactCandidates runId={run.id} candidates={snapshot.contactCandidates} />
+      ) : null}
 
       {/* Selected hook */}
       {hookOut && (

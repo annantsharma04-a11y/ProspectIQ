@@ -37,7 +37,7 @@ app still runs, using public-web research only, and reports that in the UI.
 
 ## The pipeline
 
-Fourteen stages, each recorded in `run_stages` with its status, duration, summary and
+Fifteen stages, each recorded in `run_stages` with its status, duration, summary and
 raw output. The middle panel shows them executing live.
 
 The order encodes the product's core principle: **establish who this is, decide whether

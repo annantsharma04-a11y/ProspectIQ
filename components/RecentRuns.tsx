@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { listRuns } from '@/lib/supabase/queries';
+import { getAuthenticatedUser } from '@/lib/supabase/server';
 
 const STATUS_TONE: Record<string, string> = {
   ready_for_review: 'bg-emerald-500',
@@ -14,9 +15,12 @@ const STATUS_TONE: Record<string, string> = {
 
 /** Real recent runs only — never seeded, never sample data. */
 export async function RecentRuns({ limit = 6 }: { limit?: number }) {
+  const user = await getAuthenticatedUser();
+  if (!user) return null;
+
   let runs;
   try {
-    runs = await listRuns(limit);
+    runs = await listRuns(user.id, limit);
   } catch {
     return null;
   }
@@ -28,7 +32,7 @@ export async function RecentRuns({ limit = 6 }: { limit?: number }) {
           Recent runs
         </h2>
         <p className="rounded-lg border border-dashed border-slate-200 px-3 py-4 text-xs leading-relaxed text-slate-500">
-          No runs yet. Analyze a prospect and the ten pipeline stages will report here as they
+          No runs yet. Analyze a prospect and the fifteen pipeline stages will report here as they
           execute.
         </p>
       </div>

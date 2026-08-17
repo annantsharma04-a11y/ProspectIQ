@@ -1,10 +1,14 @@
-// The ten pipeline stages.
+// The fifteen pipeline stages.
 //
-// Exactly ONE stage (`evaluate_signals`) calls a model. Everything else is
-// deterministic code: URL validation, profile retrieval and normalization,
-// search, dedup, scraping, scoring, hook gating, quote verification and claim
-// checks. That keeps cost and quota usage at one LLM call per prospect while
-// leaving the safety gates in code, where a model cannot argue with them.
+// One stage (`evaluate_signals`) calls a model on every run. `find_contact_
+// candidates` calls a second model, but ONLY in one narrow, rare state — the
+// company qualified and the submitted person did not — and every other run
+// pays nothing for it: the stage is a zero-cost no-op otherwise. Everything
+// else is deterministic code: URL validation, profile retrieval and
+// normalization, search, dedup, scraping, scoring, hook gating, quote
+// verification and claim checks. Safety gates stay in code, where a model
+// cannot argue with them, in both cases: the discovery model proposes
+// candidates, and lib/contacts/rank.ts independently verifies and ranks them.
 //
 // Rules that hold for every stage:
 //   * It records what actually happened — durations, provider failures, counts.
@@ -24,6 +28,7 @@ import {
   skipRemainingStages,
   listSignals,
 } from '@/lib/supabase/queries';
+import { checkVoice } from '@/lib/generation/voice';
 import { parseLinkedInUrl } from '@/lib/linkedin/url';
 import { retrieveLinkedInProfile } from '@/lib/linkedin/fetch';
 import { renderProfile } from '@/lib/linkedin/profile';
@@ -50,8 +55,47 @@ import { verifySelectedCandidate } from '@/lib/identity/verify';
 import { decideIdentity, selectCandidate, accountFields } from '@/lib/identity/types';
 import { fieldRecoveryQueries, recoverIdentityField, type RecoverableField } from '@/lib/identity/recover-field';
 import { combineQualification, PROSPECT_FIT_FLOOR, COMPANY_FIT_FLOOR } from '@/lib/qualification/types';
+import { discoverContacts } from '@/lib/contacts/discover';
+import { rankCandidates } from '@/lib/contacts/rank';
+import { createContactCandidates } from '@/lib/supabase/queries';
 import { StageAbort, type PipelineContext } from './context';
 import type { SignalRow, SourceRow, StageName, StageStatus } from '@/lib/types';
+
+/**
+ * A message safe to store and show, from whatever was thrown.
+ *
+ * `if (error) throw error;` runs throughout lib/supabase/queries.ts — but the
+ * supabase-js client's `{ data, error }` return style hands back a PLAIN
+ * PARSED JSON OBJECT for `error`, not an actual `Error` instance (that class
+ * only gets constructed on the throw-on-error code path this codebase doesn't
+ * use). `err instanceof Error` is therefore false for every database failure,
+ * and `String(err)` on a plain object is JavaScript's default coercion:
+ * literally the text "[object Object]". This was latent everywhere a stage's
+ * generic catch could receive a database error — it only surfaced once
+ * find_contact_candidates became the first stage to hit a genuinely failing
+ * write (contact_candidates did not exist in the database yet).
+ *
+ * Handles three shapes without ever falling through to a bare String(object):
+ * real Errors, Postgrest-shaped objects ({message, details, hint, code}), and
+ * anything else via JSON.stringify.
+ */
+export function describeError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === 'object') {
+    const e = err as { message?: unknown; details?: unknown; hint?: unknown; code?: unknown };
+    const parts = [e.message, e.details, e.hint].filter(
+      (v): v is string => typeof v === 'string' && v.trim().length > 0,
+    );
+    if (parts.length > 0) return parts.join(' — ');
+    if (typeof e.code === 'string' && e.code) return `Unexpected error (code ${e.code})`;
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return 'Unexpected error.';
+    }
+  }
+  return String(err);
+}
 
 /**
  * Wrap a stage: time it, persist start/finish, and convert a thrown error into
@@ -75,7 +119,7 @@ async function runStage<T>(
     return value;
   } catch (err) {
     if (err instanceof StageAbort) throw err;
-    const message = err instanceof Error ? err.message : String(err);
+    const message = describeError(err);
     await finishStage(stageId, {
       status: 'failed',
       summary: `Stage failed: ${message}`,
@@ -673,6 +717,7 @@ export async function pauseForCandidateChoice(ctx: PipelineContext): Promise<voi
     'research_company',
     'qualify_prospect',
     'qualify_company',
+    'find_contact_candidates',
     'collect_signals',
     'evaluate_signals',
     'select_hook',
@@ -738,6 +783,7 @@ export async function haltUnverifiedIdentity(ctx: PipelineContext): Promise<void
     'research_company',
     'qualify_prospect',
     'qualify_company',
+    'find_contact_candidates',
     'collect_signals',
     'evaluate_signals',
     'select_hook',
@@ -852,6 +898,146 @@ export async function qualifyCompanyStage(ctx: PipelineContext): Promise<void> {
   });
 }
 
+// ─── contact candidate discovery ─────────────────────────────────────────────
+//
+// Runs only in one specific state: the company qualified, but the submitted
+// person does not own the relevant workflow. That is exactly the state
+// combineQualification already flags via a non-null `suggestion` — this stage
+// reuses that flag rather than re-deriving "is the prospect weak" itself.
+//
+// Every other run — fully qualified, or company also weak — passes through as
+// a zero-cost no-op. No query, no model call, nothing persisted.
+
+export async function findContactCandidatesStage(ctx: PipelineContext): Promise<void> {
+  await runStage(ctx, 'find_contact_candidates', async () => {
+    const q = ctx.qualification;
+    // Reuses qualification's own decision, never re-derives it: `suggestion`
+    // is set by combineQualification in EXACTLY the states where the company
+    // stands on its own but the submitted person does not — both the plain
+    // "prospect below the floor" case and the "prospect fit rests on inferred
+    // seniority, not an observed workflow link" case. Every other non-proceed
+    // state (company weak, company evidence itself only inferred, either side
+    // UNKNOWN) leaves `suggestion` null, and this stage stays a no-op there —
+    // there is either no qualified account to search at, or too much
+    // uncertainty to say the CONTACT specifically is the problem.
+    const applicable = Boolean(q && !q.proceed && q.suggestion);
+
+    if (!applicable) {
+      const reason = q?.proceed
+        ? 'PROSPECT_QUALIFIED'
+        : q?.classification === 'NOT_QUALIFIED'
+          ? 'NOT_QUALIFIED'
+          : q
+            ? 'NO_SUGGESTION'
+            : 'NO_QUALIFICATION';
+      return {
+        status: 'skipped' as const,
+        summary: q?.proceed
+          ? 'Not applicable — the submitted prospect already qualified.'
+          : q
+            ? `Not applicable — ${q.reason}`
+            : 'Not applicable — qualification did not run.',
+        output: { skipped: true, reason },
+        value: undefined,
+      };
+    }
+
+    const company = ctx.identity?.company ?? ctx.run.input_company;
+    if (!company) {
+      return {
+        status: 'skipped' as const,
+        summary: 'No company name was resolved, so no contact search could be built.',
+        output: { skipped: true, reason: 'NO_COMPANY' },
+        value: undefined,
+      };
+    }
+
+    const capabilities = capabilityContext(ctx);
+    const workflowSignals = capabilities.observed.map((c) => c.workflow);
+
+    if (workflowSignals.length === 0) {
+      ctx.contactCandidates = [];
+      return {
+        status: 'complete' as const,
+        summary: 'No observed workflow to derive functional-owner roles from — no candidates searched for.',
+        // Still the applicable state (company qualified, contact did not) —
+        // only the role derivation came up empty. The UI shows this case too,
+        // just with an honest empty result rather than hiding the section.
+        output: { applicable: true, candidates: [], roles: [], reason: 'NO_OBSERVED_WORKFLOW' },
+        value: undefined,
+      };
+    }
+
+    const domains = ctx.identity?.company_domain ? [ctx.identity.company_domain] : [];
+    const result = await discoverContacts({
+      company,
+      workflowSignals,
+      existingSources: ctx.sources,
+      companyDomains: domains,
+    });
+
+    ctx.sources = result.sources;
+    await persistSources(ctx);
+
+    const ranked = rankCandidates(result.proposed, result.sources, result.roles, workflowSignals[0]);
+    ctx.contactCandidates = ranked;
+
+    // Persistence is wrapped on its own, separately from discovery above: the
+    // candidates were genuinely found by this point (real search, real
+    // verification against real quotes), and a write failure here — most
+    // plausibly the table not existing yet in a not-fully-migrated database —
+    // must not be reported as though nothing was discovered, and must not
+    // fail the whole run over what a human still needs to see. It is surfaced
+    // explicitly instead: DEGRADED, not complete, with the reason spelled out
+    // in both the summary and the output, never swallowed silently.
+    let persistenceError: string | null = null;
+    if (ranked.length > 0) {
+      try {
+        await createContactCandidates(
+          ctx.runId,
+          ranked.map((c) => ({
+            name: c.name,
+            role: c.role,
+            company,
+            linkedin_url: c.linkedin_url,
+            reason: c.reason,
+            evidence: [c.evidence],
+            confidence: c.confidence,
+            rank_score: c.rankScore,
+          })),
+        );
+      } catch (err) {
+        persistenceError = describeError(err);
+      }
+    }
+
+    const found = ranked.length > 0;
+    return {
+      status: (persistenceError ? 'degraded' : 'complete') as StageStatus,
+      summary: persistenceError
+        ? `${ranked.length} candidate(s) found for ${result.roles.join(', ')} at ${company}, but they could not be saved: ${persistenceError}`
+        : found
+          ? `${ranked.length} candidate(s) found for ${result.roles.join(', ')} at ${company}.`
+          : `No verified candidates found for ${result.roles.join(', ')} at ${company} — searched ${result.queriesOk}/${result.queriesRun} queries.`,
+      output: {
+        applicable: true,
+        company,
+        roles: result.roles,
+        // Shown even when persistence failed — they were genuinely found;
+        // Select is unavailable until they exist as rows, which the
+        // persistence_error field makes explicit rather than silent.
+        candidates: ranked,
+        queries_ok: result.queriesOk,
+        queries_run: result.queriesRun,
+        proposed_count: result.proposed.length,
+        suggestion: q?.suggestion,
+        persistence_error: persistenceError,
+      },
+      value: undefined,
+    };
+  });
+}
+
 /**
  * The capabilities this company was actually shown to have, versus the ones
  * merely inferred. Only the observed set may justify an outreach angle.
@@ -935,6 +1121,9 @@ export async function haltUnqualified(ctx: PipelineContext): Promise<void> {
       qualification: q,
       reasons: [q?.reason ?? 'Target did not qualify.'],
       suggestion: q?.suggestion ?? null,
+      // Populated only in the account-qualified/contact-not-qualified state;
+      // null contactCandidates means the state does not apply to this run.
+      contact_candidates: ctx.contactCandidates ?? null,
       model_calls_used: 1,
       nothing_sent: true,
     },
@@ -1715,11 +1904,14 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
     };
     const gate = checkPersonalization(messageText, ctx.hook, personContext);
     const opener = checkOpener(messageText, ctx.hook);
+    // Voice is checked in code, not trusted to the prompt. The hook's verified
+    // quote is exempted so evidence is never rewritten to satisfy a style rule.
+    const voice = checkVoice(messageText, { quotes: [ctx.hook.supporting_quote] });
     let finalText = messageText;
     let regenerated = false;
 
     // One regeneration total, whichever quality check failed.
-    if (!gate.passed || opener.isHeadline) {
+    if (!gate.passed || opener.isHeadline || !voice.passed) {
       const directive = [
         !gate.passed
           ? `Your previous draft was rejected as too generic: ${gate.failures.join(' ')}`
@@ -1729,6 +1921,10 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
             'and role relevance, but do not restate the research summary. ' +
             `Specifically: ${opener.failures.join(' ')} ` +
             'Aim for roughly 15-30 words, one observation, no company description, no superlatives.'
+          : null,
+        !voice.passed
+          ? 'The draft reads as generated rather than written. Fix these specific problems without ' +
+            `changing any verified fact or adding a new one: ${voice.failures.join(' ')}`
           : null,
       ]
         .filter(Boolean)
@@ -1743,6 +1939,7 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
 
     const secondGate = checkPersonalization(finalText, ctx.hook, personContext);
     const secondOpener = checkOpener(finalText, ctx.hook);
+    const secondVoice = checkVoice(finalText, { quotes: [ctx.hook.supporting_quote] });
     const words = wordCount(finalText);
 
     await deleteDrafts(ctx.runId);
@@ -1757,7 +1954,7 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
       information_requests: analysis.informationRequests ?? [],
     });
     ctx.draftId = row.id;
-    const qualityPassed = secondGate.passed && !secondOpener.isHeadline;
+    const qualityPassed = secondGate.passed && !secondOpener.isHeadline && secondVoice.passed;
     ctx.messageFailedGate = !qualityPassed;
 
     return {
@@ -1766,7 +1963,9 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
         ? `Personalised draft (${words} words, personalisation ${secondGate.score}/100)${regenerated ? ', regenerated once for quality' : ''}.`
         : secondOpener.isHeadline
           ? `Draft still opens by restating the source after one regeneration (${words} words) — sent to manual review.`
-          : `Draft still reads as generic after one regeneration (${words} words) — sent to manual review.`,
+          : !secondVoice.passed
+            ? `Draft still carries generated-sounding phrasing after one regeneration (${words} words) — sent to manual review.`
+            : `Draft still reads as generic after one regeneration (${words} words) — sent to manual review.`,
       output: {
         mode: 'personalized',
         subject: analysis.suggestedSubject,
@@ -1791,6 +1990,14 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
           final_failures: secondOpener.failures,
           first_attempt_reason: opener.reason,
           final_reason: secondOpener.reason,
+        },
+        voice_check: {
+          passed: secondVoice.passed,
+          word_count: secondVoice.wordCount,
+          exclamations: secondVoice.exclamations,
+          issues: secondVoice.issues,
+          first_attempt_failures: voice.failures,
+          final_failures: secondVoice.failures,
         },
         declared_claims: analysis.messageClaims,
         information_requests: analysis.informationRequests,

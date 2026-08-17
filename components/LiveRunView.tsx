@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { createBrowserSupabase } from '@/lib/supabase/client';
 import { STAGE_ORDER, STAGE_LABELS, type RunSnapshot, type RunStageRow, type StageName } from '@/lib/types';
+import { contactCandidatesStageIsVisible } from '@/lib/contacts/types';
 
 const ACTIVE = new Set(['queued', 'running']);
 
@@ -110,6 +111,15 @@ export function LiveRunView({
   const failed = snapshot.run.status === 'failed';
   const pendingAnalysis = snapshot.run.status === 'ai_analysis_pending';
 
+  // find_contact_candidates is shown only in the one state it actually did
+  // something in — see contactCandidatesStageIsVisible for why.
+  const showContactCandidatesStage = contactCandidatesStageIsVisible(
+    byName.get('find_contact_candidates')?.output,
+  );
+  const visibleStages = STAGE_ORDER.filter(
+    (name) => name !== 'find_contact_candidates' || showContactCandidatesStage,
+  );
+
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="mb-4 flex items-baseline justify-between">
@@ -120,7 +130,7 @@ export function LiveRunView({
       </div>
 
       <ol className="space-y-1.5">
-        {STAGE_ORDER.map((name, i) => {
+        {visibleStages.map((name, i) => {
           const stage = byName.get(name);
           const status = stage?.status ?? 'pending';
           return (

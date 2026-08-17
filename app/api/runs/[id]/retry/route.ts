@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { retryRun } from '@/lib/pipeline/execute';
-import { getRun } from '@/lib/supabase/queries';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { requireOwnedRun } from '@/lib/auth/guard';
 
 export const runtime = 'nodejs';
 
@@ -13,8 +13,10 @@ export const runtime = 'nodejs';
 export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
 
-  const run = await getRun(id);
-  if (!run) return NextResponse.json({ error: 'Run not found' }, { status: 404 });
+  const access = await requireOwnedRun(id);
+  if ('response' in access) return access.response;
+  const { run } = access;
+
   if (run.status === 'running') {
     return NextResponse.json({ error: 'Run is already in progress' }, { status: 409 });
   }

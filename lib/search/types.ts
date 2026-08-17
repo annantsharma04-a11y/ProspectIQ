@@ -16,7 +16,8 @@ export type QueryCategory =
   | 'company_hiring'
   | 'company_product'
   | 'company_strategy'
-  | 'followup';
+  | 'followup'
+  | 'contact_discovery';
 
 export interface SearchQuery {
   query: string;

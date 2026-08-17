@@ -1,7 +1,7 @@
 // Optional durable execution path (USE_INNGEST=true).
 //
 // The pipeline's stages share in-memory context, so the whole run is one
-// durable step rather than ten. Inngest still buys retries and a persistent
+// durable step rather than fourteen. Inngest still buys retries and a persistent
 // execution record; the per-stage audit trail lives in run_stages either way.
 
 import { inngest, OUTREACH_RUN_REQUESTED } from '../client';

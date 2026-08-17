@@ -10,6 +10,7 @@ import {
   updateRun,
   listSources,
   getStage,
+  syncProspectFromRun,
 } from '@/lib/supabase/queries';
 import { newContext, StageAbort, type PipelineContext } from './context';
 import type { NormalizedSource } from '@/lib/research/normalize';
@@ -28,6 +29,7 @@ import {
   pauseForCandidateChoice,
   qualifyProspectStage,
   qualifyCompanyStage,
+  findContactCandidatesStage,
   isQualified,
   haltUnqualified,
   collectSignalsStage,
@@ -37,6 +39,23 @@ import {
   validateClaimsStage,
   readyForReviewStage,
 } from './stages';
+
+/**
+ * Refresh the prospect's "latest known state" from the run that just finished.
+ *
+ * Called on every terminal path — success, halt, park and failure alike — so the
+ * prospect reflects whatever the run did establish. It never throws into the
+ * pipeline: failing to update a rollup must not fail a run whose research is
+ * already safely stored.
+ */
+async function syncProspect(runId: string): Promise<void> {
+  try {
+    const fresh = await getRun(runId);
+    if (fresh) await syncProspectFromRun(fresh);
+  } catch (err) {
+    console.error(`[run ${runId}] prospect sync failed:`, err);
+  }
+}
 
 export async function executePipeline(runId: string): Promise<void> {
   const run = await getRun(runId);
@@ -80,6 +99,8 @@ export async function executePipeline(runId: string): Promise<void> {
     // about this product at this company, before spending an analysis pass.
     await qualifyProspectStage(ctx);
     await qualifyCompanyStage(ctx);
+    // Zero-cost no-op unless the company qualified and this person did not.
+    await findContactCandidatesStage(ctx);
     if (!isQualified(ctx)) {
       await haltUnqualified(ctx);
       return;
@@ -102,6 +123,9 @@ export async function executePipeline(runId: string): Promise<void> {
       completed_at: new Date().toISOString(),
     });
     throw err;
+  } finally {
+    // Runs on every exit: completion, early return from a gate, and failure.
+    await syncProspect(runId);
   }
 }
 
@@ -155,6 +179,9 @@ export async function retryAnalysis(runId: string): Promise<void> {
       completed_at: new Date().toISOString(),
     });
     throw err;
+  } finally {
+    // Runs on every exit: completion, early return from a gate, and failure.
+    await syncProspect(runId);
   }
 }
 
@@ -197,6 +224,7 @@ export async function resumeAfterIdentity(runId: string): Promise<void> {
     await researchCompanyStage(ctx);
     await qualifyProspectStage(ctx);
     await qualifyCompanyStage(ctx);
+    await findContactCandidatesStage(ctx);
     if (!isQualified(ctx)) {
       await haltUnqualified(ctx);
       return;
@@ -216,6 +244,9 @@ export async function resumeAfterIdentity(runId: string): Promise<void> {
       completed_at: new Date().toISOString(),
     });
     throw err;
+  } finally {
+    // Runs on every exit: completion, early return from a gate, and failure.
+    await syncProspect(runId);
   }
 }
 

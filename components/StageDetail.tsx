@@ -1,7 +1,18 @@
 'use client';
 
 import { useState } from 'react';
-import { STAGE_LABELS, type RunRow, type RunStageRow, type StageName } from '@/lib/types';
+import {
+  STAGE_LABELS,
+  type RunRow,
+  type RunStageRow,
+  type SignalRow,
+  type SourceRow,
+  type StageName,
+} from '@/lib/types';
+import { TopSources } from './TopSources';
+import { ContactCandidates } from './ContactCandidates';
+import type { ContactCandidateRow } from '@/lib/contacts/types';
+import type { EvidenceItem } from '@/lib/qualification/types';
 
 // Human-readable stage explanations.
 //
@@ -27,6 +38,8 @@ const PURPOSE: Record<StageName, string> = {
     'Judges whether this person is a meaningful target — their function, seniority and likely influence over the workflows the product addresses. This is a targeting decision about the role, not a comment on the person.',
   qualify_company:
     'Judges whether this company plausibly needs what you sell, matching observable characteristics against your configured capabilities, then makes the go/no-go call.',
+  find_contact_candidates:
+    'Runs only when the company qualified but this person did not: proposes other people at the company who plausibly own the workflow that qualified it. Nothing here is auto-selected — a human chooses.',
   collect_signals:
     'Consolidates everything found into one deduplicated evidence set and grades how strong each source is.',
   evaluate_signals:
@@ -137,9 +150,18 @@ function Stat({ label, value, tone = 'neutral' }: { label: string; value: React.
 export function StageDetail({
   run,
   stage,
+  sources = [],
+  signals = [],
+  contactCandidates = [],
 }: {
   run: RunRow;
   stage: RunStageRow;
+  /** Persisted sources for this run. Already loaded; nothing is re-fetched. */
+  sources?: SourceRow[];
+  /** Verified signals, used only to mark which sources became evidence. */
+  signals?: SignalRow[];
+  /** Discovered alternative contacts, when this is the find_contact_candidates stage. */
+  contactCandidates?: ContactCandidateRow[];
 }) {
   const [showJson, setShowJson] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -196,7 +218,7 @@ export function StageDetail({
           </Section>
         )}
 
-        <StageBody name={name} output={output} run={run} />
+        <StageBody name={name} output={output} run={run} sources={sources} signals={signals} contactCandidates={contactCandidates} />
 
         <Section title="Technical details">
           <div className="flex items-center gap-2">
@@ -227,7 +249,21 @@ export function StageDetail({
 }
 
 /** Stage-specific presentation, driven entirely by recorded output. */
-function StageBody({ name, output, run }: { name: StageName; output: Output | null; run: RunRow }) {
+function StageBody({
+  name,
+  output,
+  run,
+  sources,
+  signals,
+  contactCandidates,
+}: {
+  name: StageName;
+  output: Output | null;
+  run: RunRow;
+  sources: SourceRow[];
+  signals: SignalRow[];
+  contactCandidates: ContactCandidateRow[];
+}) {
   if (!output) return null;
 
   switch (name) {
@@ -355,10 +391,16 @@ function StageBody({ name, output, run }: { name: StageName; output: Output | nu
               <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">{note}</p>
             )}
           </Section>
+          <Section title="Top sources">
+            <TopSources sources={sources} signals={signals} stage={name} />
+          </Section>
           <Section title="Why it matters">
             <p className="text-sm text-slate-700">
               Full evidence means a page was retrieved and read. Snippet evidence still counts, but
               carries lower confidence and needs corroboration before it can support a claim.
+              Retrieving a source is not the same as using it: only sources marked{' '}
+              <span className="font-medium">Used as evidence</span> survived verification and
+              support a signal.
             </p>
           </Section>
         </>
@@ -558,9 +600,9 @@ function StageBody({ name, output, run }: { name: StageName; output: Output | nu
             <Section title="Capability matching">
               <p className="mb-2 text-sm text-slate-600">
                 Qualification basis:{' '}
-                {matches.filter((m) => m.basis === 'OBSERVED' && ((m.evidence as string[]) ?? []).length > 0).length}{' '}
+                {matches.filter((m) => m.basis === 'OBSERVED' && ((m.evidence as EvidenceItem[]) ?? []).length > 0).length}{' '}
                 observed use case
-                {matches.filter((m) => m.basis === 'OBSERVED' && ((m.evidence as string[]) ?? []).length > 0).length === 1
+                {matches.filter((m) => m.basis === 'OBSERVED' && ((m.evidence as EvidenceItem[]) ?? []).length > 0).length === 1
                   ? ''
                   : 's'}
                 . Inferred entries are shown for research context and did not qualify this company.
@@ -585,11 +627,11 @@ function StageBody({ name, output, run }: { name: StageName; output: Output | nu
                         Observed: {String(m.company_signal)}
                       </p>
                     ) : null}
-                    {(m.evidence as string[])?.length ? (
+                    {(m.evidence as EvidenceItem[])?.length ? (
                       <ul className="mt-1 space-y-0.5">
-                        {(m.evidence as string[]).slice(0, 3).map((e, j) => (
-                          <li key={j} className="truncate text-xs text-slate-400" title={e}>
-                            {e}
+                        {(m.evidence as EvidenceItem[]).slice(0, 3).map((e, j) => (
+                          <li key={j} className="truncate text-xs text-slate-400" title={`${e.url} — "${e.quote}"`}>
+                            {e.url}
                           </li>
                         ))}
                       </ul>
@@ -644,6 +686,47 @@ function StageBody({ name, output, run }: { name: StageName; output: Output | nu
               ) : null}
             </Section>
           ) : null}
+        </>
+      );
+    }
+
+    case 'find_contact_candidates': {
+      if (get<boolean>(output, 'skipped')) {
+        // The accurate, case-specific reason is already shown above in
+        // "Result" (stage.summary) — this only needs to confirm the stage
+        // is a no-op here, not re-derive or guess WHY from a status code.
+        return (
+          <Section title="Not applicable">
+            <p className="text-sm text-slate-600">
+              This run did not reach the specific state — a qualified company paired with a contact
+              who is not — so no alternative contacts were searched for. See Result above for why.
+            </p>
+          </Section>
+        );
+      }
+      const company = get<string>(output, 'company');
+      const roles = get<string[]>(output, 'roles') ?? [];
+      return (
+        <>
+          {roles.length > 0 && (
+            <Section title="Roles searched">
+              <p className="text-sm text-slate-700">
+                Derived from the qualified workflow, not guessed by seniority: {roles.join(', ')}
+                {company ? ` at ${company}` : ''}.
+              </p>
+            </Section>
+          )}
+          {get<string>(output, 'persistence_error') && (
+            <Section title="Could not be saved">
+              <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                Candidates were found but could not be stored ({get<string>(output, 'persistence_error')}), so
+                they cannot be selected yet. Retry this run once the issue is resolved.
+              </p>
+            </Section>
+          )}
+          <Section title="Suggested contacts">
+            <ContactCandidates runId={run.id} candidates={contactCandidates} />
+          </Section>
         </>
       );
     }
