@@ -1,0 +1,52 @@
+{
+  "_comment": "Sanitized Bright Data LinkedIn people-profile record. Field names mirror the provider's documented output; all values are invented for testing.",
+  "id": "test-profile-0001",
+  "input_url": "https://www.linkedin.com/in/dana-example",
+  "url": "https://www.linkedin.com/in/dana-example",
+  "name": "Dana Example",
+  "position": "VP Finance Operations at Northwind Logistics",
+  "about": "Finance operations leader focused on automating AP and reconciliation at scale.",
+  "city": "Austin",
+  "country_code": "US",
+  "followers": 4213,
+  "connections": 500,
+  "current_company": {
+    "name": "Northwind Logistics",
+    "title": "VP Finance Operations",
+    "link": "https://www.linkedin.com/company/northwind-logistics",
+    "company_id": "northwind-logistics"
+  },
+  "experience": [
+    {
+      "company": "Northwind Logistics",
+      "title": "VP Finance Operations",
+      "location": "Austin, Texas",
+      "start_date": "2024-03",
+      "end_date": null,
+      "description": "Leads a 30-person finance operations team covering AP, AR and compliance."
+    },
+    {
+      "company": "Cascade Freight",
+      "title": "Director, Financial Operations",
+      "location": "Denver, Colorado",
+      "start_date": "2019-01",
+      "end_date": "2024-02",
+      "description": "Built the shared services function."
+    }
+  ],
+  "education": [
+    {
+      "title": "University of Texas at Austin",
+      "degree": "BBA",
+      "field": "Accounting",
+      "start_year": "2010",
+      "end_year": "2014"
+    }
+  ],
+  "skills": [
+    { "name": "Accounts Payable" },
+    { "name": "Process Automation" },
+    { "name": "Accounts Payable" }
+  ],
+  "posts": [{ "title": "Why AP automation stalls", "date": "2026-05-02" }]
+}
