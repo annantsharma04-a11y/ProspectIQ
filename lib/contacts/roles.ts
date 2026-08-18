@@ -29,6 +29,13 @@ const FAMILIES: RoleFamily[] = [
     roles: ['CFO', 'VP Finance', 'Revenue Operations Lead', 'Head of Billing', 'Controller'],
   },
   {
+    // Distinct from the AP family above: AP is about paying out invoices,
+    // this is about contesting/defending incoming card and payment disputes
+    // — a different function with different owners, even at the same company.
+    keywords: /\b(chargebacks?|dispute handling|payment disputes?|payments? risk|dispute resolution|fraud)\b/i,
+    roles: ['Head of Payments', 'VP Payments', 'Head of Risk', 'Fraud and Risk Director'],
+  },
+  {
     keywords: /\b(procurement|sourcing|vendor management|supply chain)\b/i,
     roles: ['Head of Procurement', 'VP Supply Chain', 'Chief Procurement Officer', 'Sourcing Director'],
   },

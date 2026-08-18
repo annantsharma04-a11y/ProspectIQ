@@ -50,6 +50,110 @@ describe('role derivation is workflow-driven, never generic', () => {
   });
 });
 
+// ─── regression: Myntra — a chargebacks-only observed capability found no
+// roles at all, because lib/contacts/roles.ts had no family for chargebacks
+// or payment disputes. The AP family only matches the compound phrase
+// "payment dispute", never "chargeback" alone. This left the qualified-but-
+// unstaffed company (company_fit HIGH, prospect_fit LOW) with 0 role queries,
+// 0 searches, and a dishonest-looking "no candidates found" even though the
+// qualified workflow was a real, configured capability with an obvious set of
+// functional owners.
+
+describe('chargeback / payment-dispute role family (Myntra regression)', () => {
+  it('maps chargeback language to payments/risk titles', () => {
+    const roles = rolesForWorkflows(['High chargeback volume from card-not-present transactions']);
+    expect(roles).toContain('Head of Payments');
+    expect(roles).toContain('Head of Risk');
+    expect(roles).not.toContain('CFO');
+    expect(roles).not.toContain('VP Engineering');
+  });
+
+  it('maps each documented match term individually', () => {
+    for (const term of ['chargeback', 'chargebacks', 'dispute handling', 'payment disputes', 'fraud', 'payments risk']) {
+      expect(rolesForWorkflows([term]).length).toBeGreaterThan(0);
+    }
+  });
+
+  it('stays distinct from the AP family — dispute handling is not accounts payable', () => {
+    const roles = rolesForWorkflows(['dispute handling']);
+    expect(roles).not.toContain('CFO');
+    expect(roles).not.toContain('Head of Accounts Payable');
+  });
+
+  it('the exact Myntra company_signal text alone still matches nothing — the gap is real, not fixed by keyword luck', () => {
+    // This is the actual company_signal the qualification model produced for
+    // the run that regressed: it describes the workflow in free prose without
+    // ever using a word this or any family keys on. Proves the fix has to be
+    // (and is) "also search capability_name", not just "add more keywords".
+    const companySignalAlone =
+      'High-volume online retail and e-commerce consumer transactions with massive monthly active users.';
+    expect(rolesForWorkflows([companySignalAlone])).toEqual([]);
+  });
+
+  it('the capability_name for that same match DOES resolve roles — proving the stages.ts fix closes the gap', () => {
+    const capabilityNameAlone = 'Chargebacks and Dispute Handling';
+    const roles = rolesForWorkflows([capabilityNameAlone]);
+    expect(roles.length).toBeGreaterThan(0);
+    expect(roles).toContain('Head of Payments');
+  });
+
+  it('chargebacks combined with a non-finance family surfaces both role sets', () => {
+    // AP and AR are both already sized at MAX_ROLES on their own (5 roles),
+    // so combined with any other matched family the earlier-ordered family
+    // alone fills the global cap — the same fixed-priority behavior already
+    // exercised for AP+AR above. Pairing chargebacks with a smaller family
+    // (KYC/compliance, 4 roles) leaves room to prove BOTH families' roles can
+    // surface together, not just that the new family works in isolation.
+    const roles = rolesForWorkflows(['chargeback and dispute resolution', 'KYC and compliance onboarding']);
+    expect(roles).toContain('Head of Payments'); // chargebacks family (matched first, in FAMILIES order)
+    expect(roles).toContain('Chief Compliance Officer'); // compliance family, still has room under the cap
+  });
+});
+
+// ─── unrelated capabilities are unaffected by the new family ────────────────
+
+describe('unrelated capabilities keep their existing role sets unchanged', () => {
+  it('KYC/compliance language is untouched by the new chargebacks family', () => {
+    const roles = rolesForWorkflows(['Regulated onboarding requires KYC and KYB verification']);
+    expect(roles).toContain('Chief Compliance Officer');
+    expect(roles).toContain('Head of Risk');
+    expect(roles).not.toContain('Head of Payments');
+  });
+
+  it('procurement language is untouched', () => {
+    const roles = rolesForWorkflows(['Centralized vendor sourcing and supply chain procurement']);
+    expect(roles).toContain('Head of Procurement');
+    expect(roles).not.toContain('Head of Payments');
+  });
+
+  it('engineering language is untouched', () => {
+    const roles = rolesForWorkflows(['Core platform infrastructure and SRE reliability work']);
+    expect(roles).toContain('VP Engineering');
+    expect(roles).not.toContain('Head of Payments');
+  });
+
+  it('a workflow matching nothing still produces no roles, not a fallback', () => {
+    expect(rolesForWorkflows(['artisanal candle subscriptions'])).toEqual([]);
+  });
+});
+
+// ─── existing AP / payment-dispute-compound family behavior is preserved ────
+
+describe('existing AP and compound payment-dispute matching still works', () => {
+  it('"payment dispute" (the AP family compound phrase) still resolves to finance roles', () => {
+    const roles = rolesForWorkflows(['High volume of payment dispute cases in AP']);
+    expect(roles).toContain('CFO');
+    expect(roles).toContain('Head of Accounts Payable');
+  });
+
+  it('plain accounts payable / invoice / vendor payment language is unaffected', () => {
+    const roles = rolesForWorkflows(['Automates accounts payable and invoice processing']);
+    expect(roles).toContain('CFO');
+    expect(roles).toContain('Head of Accounts Payable');
+    expect(roles).not.toContain('Head of Payments');
+  });
+});
+
 // ─── ranking ─────────────────────────────────────────────────────────────────
 
 let seq = 0;

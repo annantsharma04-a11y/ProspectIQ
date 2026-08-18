@@ -229,4 +229,88 @@ describe('discoverContacts — deterministic end-to-end fixture, no live calls',
     expect(mockResearch).toHaveBeenCalledTimes(2);
     expect(result.proposed[0].linkedin_url).toBe('https://www.linkedin.com/in/ankit-tandon-7455429');
   });
+
+  // Regression: the Myntra run whose only observed capability was
+  // chargebacks. findContactCandidatesStage builds workflowSignals from BOTH
+  // the capability's company_signal (free-form model prose, which in the live
+  // run never used the word "chargeback" or "dispute") AND its capability_name
+  // (the fixed configured label, "Chargebacks and Dispute Handling"). Before
+  // the fix, roles.ts had no family for either, so this state produced 0
+  // role queries and never searched at all. This proves the fix end-to-end:
+  // real search queries run, real (mocked) search results come back, and the
+  // usual verification gates still apply on top.
+  it('a chargebacks-only observed capability now generates real role queries and searches (Myntra regression)', async () => {
+    // Exactly what capabilityContext()/findContactCandidatesStage would build:
+    // index 0 is the company_signal text (no chargeback/dispute keyword at
+    // all — this is the literal text from the regressed run), plus the
+    // capability_name that the fix now also feeds into role derivation.
+    const workflowSignals = [
+      'High-volume online retail and e-commerce consumer transactions with massive monthly active users.',
+      'Chargebacks and Dispute Handling',
+    ];
+
+    const candidateQuote = 'Priya Menon leads Payments and Fraud Risk for Myntra, overseeing chargeback resolution.';
+    const candidateUrl = 'https://example.com/myntra-leadership';
+    const roundOne: NormalizedSource[] = [
+      source({ url: candidateUrl, title: 'Myntra names Priya Menon Head of Payments', content: candidateQuote }),
+    ];
+    mockResearch.mockResolvedValueOnce(researchResult(roundOne));
+    mockCallStructured.mockResolvedValueOnce({
+      data: {
+        candidates: [
+          {
+            name: 'Priya Menon',
+            role: 'Head of Payments',
+            linkedin_url: 'https://www.linkedin.com/in/priya-menon-payments',
+            quote: candidateQuote,
+            source_url: candidateUrl,
+          },
+        ],
+      },
+      meta: { model: 'test', used_fallback_model: false, purpose: 'discover_contact_candidates', duration_ms: 1, attempts: 1, total_tokens: null },
+    });
+
+    const result = await discoverContacts({
+      company: 'Myntra',
+      workflowSignals,
+      existingSources: [],
+      companyDomains: [],
+    });
+
+    // Roles were actually derived — the pre-fix behavior was roles: [] here.
+    expect(result.roles.length).toBeGreaterThan(0);
+    expect(result.roles).toContain('Head of Payments');
+    // A real search ran (role queries), not the roles.length===0 short circuit.
+    expect(result.queriesRun).toBeGreaterThan(0);
+    expect(mockResearch).toHaveBeenCalled();
+    // The model call happened and its (real, quote-backed) proposal came through.
+    expect(result.proposed).toHaveLength(1);
+    expect(result.proposed[0].name).toBe('Priya Menon');
+  });
+
+  it('a chargebacks-only observed capability with no real candidate in the sources still returns an honest empty result', async () => {
+    const workflowSignals = [
+      'High-volume online retail and e-commerce consumer transactions with massive monthly active users.',
+      'Chargebacks and Dispute Handling',
+    ];
+
+    mockResearch.mockResolvedValueOnce(researchResult(roundOneNoise));
+    mockCallStructured.mockResolvedValueOnce({
+      data: { candidates: [] },
+      meta: { model: 'test', used_fallback_model: false, purpose: 'discover_contact_candidates', duration_ms: 1, attempts: 1, total_tokens: null },
+    });
+
+    const result = await discoverContacts({
+      company: 'Myntra',
+      workflowSignals,
+      existingSources: [],
+      companyDomains: [],
+    });
+
+    // Roles were still derived and a real search still ran — recall improved —
+    // but with nothing genuinely found, the result is honestly empty, not padded.
+    expect(result.roles.length).toBeGreaterThan(0);
+    expect(mockResearch).toHaveBeenCalled();
+    expect(result.proposed).toHaveLength(0);
+  });
 });

@@ -953,7 +953,16 @@ export async function findContactCandidatesStage(ctx: PipelineContext): Promise<
     }
 
     const capabilities = capabilityContext(ctx);
-    const workflowSignals = capabilities.observed.map((c) => c.workflow);
+    // Both the observed company_signal text AND the capability's own name are
+    // handed to rolesForWorkflows() — company_signal is free-form model prose
+    // that may describe the workflow without ever using the word a role
+    // family keys on (e.g. a chargebacks match whose company_signal talks
+    // about "consumer transaction volume" and never says "chargeback" or
+    // "dispute"), while capability_name is the fixed, configured label for
+    // exactly that workflow. Index 0 stays company_signal so the ranked
+    // candidate's stored `reason` text (workflowSignals[0], read below) is
+    // unchanged — this only widens what role derivation is allowed to match.
+    const workflowSignals = capabilities.observed.flatMap((c) => [c.workflow, c.name]);
 
     if (workflowSignals.length === 0) {
       ctx.contactCandidates = [];
