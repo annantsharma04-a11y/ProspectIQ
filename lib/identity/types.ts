@@ -24,13 +24,72 @@ export interface IdentityCandidate {
   origin: 'profile_provider' | 'public_research';
 }
 
+/**
+ * Where an identity field's value actually came from.
+ *
+ * The distinction exists because these carry very different authority, and
+ * collapsing them is how a model's guess starts being treated as a retrieved
+ * fact:
+ *
+ *   PROFILE         the profile provider returned it. The strongest thing we
+ *                   have, and the only value that can contradict public
+ *                   evidence about who this person is.
+ *   USER_HINT       the person running the search typed it. Actionable, and
+ *                   worth surfacing when evidence contradicts it — but never
+ *                   itself evidence.
+ *   CANDIDATE       the discovery model proposed it. Useful for FINDING a
+ *                   person; it establishes nothing on its own.
+ *   PUBLIC_EVIDENCE an independently retrieved source corroborated it.
+ */
+export type FieldProvenance = 'PROFILE' | 'USER_HINT' | 'CANDIDATE' | 'PUBLIC_EVIDENCE';
+
+/**
+ * Provenances with the standing to contradict public evidence about identity.
+ *
+ * CANDIDATE is deliberately absent and is the whole point of this distinction:
+ * a title the discovery model proposed disagreeing with the sources means the
+ * model was wrong, not that the person is someone else.
+ */
+const AUTHORITATIVE: readonly FieldProvenance[] = ['PROFILE', 'USER_HINT', 'PUBLIC_EVIDENCE'];
+
 /** A material disagreement between evidence sources about who this is. */
 export interface IdentityConflict {
   field: 'company' | 'role' | 'name' | 'location';
-  profile_value: string | null;
+  /**
+   * The value being contradicted. Deliberately NOT named `profile_value`: it is
+   * frequently a candidate the discovery model proposed, and naming it after
+   * the profile provider made a model guess read — and behave — as a retrieved
+   * fact. Always interpret it together with `claimed_provenance`.
+   */
+  claimed_value: string | null;
+  claimed_provenance: FieldProvenance;
   public_value: string | null;
   explanation: string;
   sources: string[];
+}
+
+/** Provenance of each field of the identity a run settled on. */
+export type IdentityProvenance = Partial<Record<(typeof IDENTITY_FIELDS)[number], FieldProvenance>>;
+
+/**
+ * Read a conflict that may have been persisted before provenance existed.
+ *
+ * Rows written by the old shape stored the compared value under `profile_value`
+ * and carried no provenance. They are read back as PROFILE, which is what that
+ * field asserted at the time — so historical runs keep the status they were
+ * given rather than silently changing meaning underneath the user.
+ */
+export function normalizeConflict(raw: unknown): IdentityConflict {
+  const c = (raw ?? {}) as Record<string, unknown>;
+  const provenance = c.claimed_provenance as FieldProvenance | undefined;
+  return {
+    field: c.field as IdentityConflict['field'],
+    claimed_value: (c.claimed_value ?? c.profile_value ?? null) as string | null,
+    claimed_provenance: provenance ?? 'PROFILE',
+    public_value: (c.public_value ?? null) as string | null,
+    explanation: (c.explanation ?? '') as string,
+    sources: Array.isArray(c.sources) ? (c.sources as string[]) : [],
+  };
 }
 
 /** Honest accounting of what verification could and could not check. */
@@ -96,6 +155,8 @@ export interface IdentityVerification {
   status: IdentityStatus;
   /** What verification could actually check, and what it found. */
   field_evidence?: FieldEvidence;
+  /** Where each field of `resolved` came from. */
+  provenance?: IdentityProvenance;
   confidence: number;
   resolution: IdentityResolution;
   /** The identity the run will use, once resolved. */
@@ -231,6 +292,8 @@ export interface IdentityDecisionInput {
   assessedConfidence: number;
   /** Fields the evidence could not establish. */
   missingFields: string[];
+  /** Where each field of the identity came from. */
+  provenance?: IdentityProvenance;
 }
 
 /**
@@ -256,6 +319,7 @@ export function decideIdentity(input: IdentityDecisionInput): IdentityVerificati
     conflicts,
     missing_fields: input.missingFields,
     selected_candidate_id: null as string | null,
+    provenance: input.provenance,
   };
 
   // Nothing to work with at all.
@@ -271,14 +335,32 @@ export function decideIdentity(input: IdentityDecisionInput): IdentityVerificati
   }
 
   // A material disagreement about who this is.
-  const materialConflicts = conflicts.filter((c) =>
-    (MATERIAL_FIELDS as readonly string[]).includes(c.field),
+  //
+  // Only a value with standing can contradict public evidence. A role the
+  // discovery model invented disagreeing with the sources says the MODEL was
+  // wrong about the title — not that the sources describe a different person —
+  // and blocking on it manufactured a profile-vs-evidence conflict out of a
+  // profile that stated no role at all. Such conflicts are still recorded and
+  // still shown; they just no longer decide the outcome. The field they
+  // concern is cleared upstream, so an unproven title becomes "unestablished"
+  // (PARTIAL) rather than "contradicted" (AMBIGUOUS) — conservative either way.
+  const materialConflicts = conflicts.filter(
+    (c) =>
+      (MATERIAL_FIELDS as readonly string[]).includes(c.field) &&
+      AUTHORITATIVE.includes(c.claimed_provenance),
   );
   if (materialConflicts.length > 0) {
     return {
       ...base,
       status: 'AMBIGUOUS',
-      reason: `Public sources disagree with the profile about this person's ${materialConflicts
+      // Names what actually disagrees. Saying "the profile" when the contested
+      // value came from the submitted details misdescribes the evidence and
+      // sends the user off to correct the wrong thing.
+      reason: `Public sources disagree with ${
+        materialConflicts.every((c) => c.claimed_provenance === 'USER_HINT')
+          ? 'the details you supplied'
+          : 'the profile'
+      } about this person's ${materialConflicts
         .map((c) => c.field)
         .join(' and ')}. Qualification has not started, because acting on the wrong identity would target the wrong person.`,
       proceed: false,
@@ -349,10 +431,13 @@ export function applyUserSelection(
     };
   }
 
-  // Conflicts that concern the identity actually chosen.
+  // Conflicts that concern the identity actually chosen. A conflict raised
+  // against a model-proposed value never had standing to block, so choosing
+  // this candidate by hand does not need to clear it either.
   const unresolved = verification.conflicts.filter((c) => {
-    if (c.field === 'company') return !valuesAgree(candidate.company, c.public_value) && !valuesAgree(candidate.company, c.profile_value);
-    if (c.field === 'role') return !valuesAgree(candidate.role, c.public_value) && !valuesAgree(candidate.role, c.profile_value);
+    if (!AUTHORITATIVE.includes(c.claimed_provenance)) return false;
+    if (c.field === 'company') return !valuesAgree(candidate.company, c.public_value) && !valuesAgree(candidate.company, c.claimed_value);
+    if (c.field === 'role') return !valuesAgree(candidate.role, c.public_value) && !valuesAgree(candidate.role, c.claimed_value);
     return false;
   });
 

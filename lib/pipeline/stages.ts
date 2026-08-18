@@ -53,6 +53,7 @@ import { qualifyTarget } from '@/lib/qualification/qualify';
 import { discoverCandidates } from '@/lib/identity/discover';
 import { verifySelectedCandidate } from '@/lib/identity/verify';
 import { decideIdentity, selectCandidate, accountFields } from '@/lib/identity/types';
+import { reconcileProvenance, providerFields, candidateFields } from '@/lib/identity/provenance';
 import { fieldRecoveryQueries, recoverIdentityField, type RecoverableField } from '@/lib/identity/recover-field';
 import {
   combineQualification,
@@ -550,15 +551,33 @@ export async function verifyIdentityStage(ctx: PipelineContext): Promise<void> {
       sources: ctx.sources,
     });
 
-    let working = selected;
-    let conflicts = evidence.conflicts;
-    let corroboratedFields = evidence.corroboratedFields;
+    // Separate what the PROVIDER returned from what the discovery model
+    // proposed, before anything is compared against public evidence. Without
+    // this the candidate's fields were handed to decideIdentity under the name
+    // `profile`, so a model-invented role was blocked on as though the profile
+    // provider had asserted it — for a profile that carried no role at all.
+    const reconciled = reconcileProvenance({
+      profileFields: providerFields(ctx.profile),
+      hints: {
+        name: ctx.run.input_name,
+        role: ctx.run.input_title,
+        company: ctx.run.input_company,
+      },
+      candidate: candidateFields(selected),
+      conflicts: evidence.conflicts,
+      corroboratedFields: evidence.corroboratedFields,
+    });
+
+    let working = { ...selected, ...reconciled.fields };
+    let conflicts = reconciled.conflicts;
+    let corroboratedFields = reconciled.corroboratedFields;
     let supportingSources = evidence.supportingSources;
     const recoveries: Awaited<ReturnType<typeof recoverIdentityField>>[] = [];
 
     let verification = decideIdentity({
       selected: working,
       selectionMethod: method,
+      provenance: reconciled.provenance,
       profile: {
         name: working.name,
         role: working.role,
@@ -616,6 +635,19 @@ export async function verifyIdentityStage(ctx: PipelineContext): Promise<void> {
       verification = decideIdentity({
         selected: working,
         selectionMethod: method,
+        // Recovery fills fields from retrieved sources, so re-derive rather
+        // than reusing the pre-recovery provenance.
+        provenance: reconcileProvenance({
+          profileFields: providerFields(ctx.profile),
+          hints: {
+            name: ctx.run.input_name,
+            role: ctx.run.input_title,
+            company: ctx.run.input_company,
+          },
+          candidate: candidateFields(working),
+          conflicts,
+          corroboratedFields,
+        }).provenance,
         profile: {
           name: working.name,
           role: working.role,
@@ -639,7 +671,11 @@ export async function verifyIdentityStage(ctx: PipelineContext): Promise<void> {
       // Sources that actually backed verification — not the candidate's own list.
       [...supportingSources, ...working.sources],
     );
-    const withEvidence = { ...verification, field_evidence: fieldEvidence };
+    const withEvidence = {
+      ...verification,
+      field_evidence: fieldEvidence,
+      provenance: verification.provenance ?? reconciled.provenance,
+    };
 
     ctx.identityVerification = withEvidence;
     await persistIdentity(ctx, withEvidence);
@@ -671,6 +707,10 @@ export async function verifyIdentityStage(ctx: PipelineContext): Promise<void> {
           : null,
         corroborated_fields: corroboratedFields,
         supporting_sources: supportingSources,
+        // Says plainly which values were demoted from "profile fact" to
+        // "model proposal", so a reader can see why a conflict did not block.
+        provenance: withEvidence.provenance,
+        provenance_notes: reconciled.notes.length > 0 ? reconciled.notes : null,
         conflicts,
         summary: evidence.summary,
         llm: evidence.meta,

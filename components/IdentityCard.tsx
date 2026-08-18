@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type { IdentityVerification } from '@/lib/identity/types';
+import { normalizeConflict, type IdentityVerification } from '@/lib/identity/types';
 import { explainCandidate } from '@/lib/identity/explain';
 
 const STATUS_TONE: Record<string, string> = {
@@ -10,6 +10,19 @@ const STATUS_TONE: Record<string, string> = {
   PARTIAL: 'border-amber-600/25 bg-amber-600/6 text-amber-900',
   AMBIGUOUS: 'border-amber-600/30 bg-amber-600/6 text-amber-900',
   FAILED: 'border-red-600/25 bg-red-600/6 text-red-900',
+};
+
+/**
+ * How to describe the value a conflict contests — determined by where that
+ * value actually came from. Saying "profile says X" when the profile provider
+ * returned nothing for that field misattributes a model guess to retrieved
+ * data, and sends the reader off to correct the wrong thing.
+ */
+const CLAIM_SOURCE: Record<string, string> = {
+  PROFILE: 'profile says',
+  USER_HINT: 'the details you supplied say',
+  CANDIDATE: 'the discovery model proposed',
+  PUBLIC_EVIDENCE: 'a retrieved source says',
 };
 
 /**
@@ -33,6 +46,11 @@ export function IdentityCard({
   const [error, setError] = useState<string | null>(null);
 
   const needsChoice = verification.status === 'AMBIGUOUS' && verification.candidates.length > 1;
+
+  // Runs analysed before provenance existed stored the contested value under
+  // `profile_value` with no provenance. Normalising on read keeps those rows
+  // rendering — and keeps them reading as the profile claims they were.
+  const conflicts = verification.conflicts.map(normalizeConflict);
 
   async function select(candidateId: string) {
     setBusy(candidateId);
@@ -89,7 +107,7 @@ export function IdentityCard({
                       Why this candidate?
                     </p>
                     <p className="mt-0.5 text-xs leading-snug text-ink/85">
-                      {explainCandidate(c, verification.conflicts, verification.candidates)}
+                      {explainCandidate(c, conflicts, verification.candidates)}
                     </p>
                   </div>
 
@@ -242,17 +260,24 @@ export function IdentityCard({
         </p>
       ) : null}
 
-      {verification.conflicts.length > 0 ? (
+      {conflicts.length > 0 ? (
         <details className="mt-2 text-xs">
           <summary className="cursor-pointer text-amber-700">
-            Conflicting evidence ({verification.conflicts.length})
+            Conflicting evidence ({conflicts.length})
           </summary>
           <ul className="mt-1 space-y-1">
-            {verification.conflicts.map((c, i) => (
+            {conflicts.map((c, i) => (
               <li key={i} className="text-muted">
-                <span className="font-medium">{c.field}:</span> profile says{' '}
-                {c.profile_value ?? 'unknown'}, sources say {c.public_value ?? 'unknown'}.{' '}
+                <span className="font-medium">{c.field}:</span> {CLAIM_SOURCE[c.claimed_provenance] ?? CLAIM_SOURCE.PROFILE}{' '}
+                {c.claimed_value ?? 'unknown'}, sources say {c.public_value ?? 'unknown'}.{' '}
                 {c.explanation}
+                {c.claimed_provenance === 'CANDIDATE' ? (
+                  <span className="text-faint">
+                    {' '}
+                    The profile provider did not supply this field, so this was not treated as a
+                    profile conflict.
+                  </span>
+                ) : null}
               </li>
             ))}
           </ul>

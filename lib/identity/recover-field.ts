@@ -157,7 +157,11 @@ Does any supplied source state this person's ${field}?`;
   const conflict: IdentityConflict | null = data.different_person_detected
     ? {
         field,
-        profile_value: field === 'role' ? candidate.role : candidate.company,
+        claimed_value: field === 'role' ? candidate.role : candidate.company,
+        // Not a model guess: a retrieved source was found describing a
+        // DIFFERENT person with this name. That is grounded evidence about who
+        // this is, and it must keep blocking the run.
+        claimed_provenance: 'PUBLIC_EVIDENCE' as const,
         public_value: data.different_person_value ?? null,
         explanation:
           data.different_person_explanation ??

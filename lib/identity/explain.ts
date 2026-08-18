@@ -14,10 +14,10 @@ function conflictsForCandidate(
   return conflicts.filter((c) => {
     if (c.field === 'company') {
       // The conflict is about this candidate if either side matches what it says.
-      return valuesAgree(candidate.company, c.profile_value) || valuesAgree(candidate.company, c.public_value);
+      return valuesAgree(candidate.company, c.claimed_value) || valuesAgree(candidate.company, c.public_value);
     }
     if (c.field === 'role') {
-      return valuesAgree(candidate.role, c.profile_value) || valuesAgree(candidate.role, c.public_value);
+      return valuesAgree(candidate.role, c.claimed_value) || valuesAgree(candidate.role, c.public_value);
     }
     return false;
   });

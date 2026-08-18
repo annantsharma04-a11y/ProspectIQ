@@ -12,6 +12,15 @@ import { renderSources } from '@/lib/llm/analyze';
 import type { NormalizedSource } from '@/lib/research/normalize';
 import type { IdentityCandidate, IdentityConflict } from './types';
 
+/** Conflict shape the discovery model returns, before provenance is applied. */
+interface RawDiscoveredConflict {
+  field: IdentityConflict['field'];
+  candidate_value?: string | null;
+  public_value?: string | null;
+  explanation?: string;
+  sources?: string[];
+}
+
 const SYSTEM = `You enumerate WHO a prospect could be, before anyone tries to sell to them.
 
 You are given a LinkedIn profile slug, whatever a profile provider returned for
@@ -85,7 +94,7 @@ const SCHEMA: JsonSchema = {
         type: 'object',
         properties: {
           field: { type: 'string', enum: ['company', 'role', 'name', 'location'] },
-          profile_value: { type: 'string', nullable: true },
+          candidate_value: { type: 'string', nullable: true },
           public_value: { type: 'string', nullable: true },
           explanation: { type: 'string' },
           sources: { type: 'array', items: { type: 'string' } },
@@ -144,7 +153,7 @@ List every person this URL could plausibly refer to, and any conflicts already v
 
   const { data, meta } = await callStructured<{
     candidates: Omit<IdentityCandidate, 'id'>[];
-    conflicts: IdentityConflict[];
+    conflicts: RawDiscoveredConflict[];
     assessed_confidence: number;
     missing_fields?: string[];
     summary?: string;
@@ -172,7 +181,10 @@ List every person this URL could plausibly refer to, and any conflicts already v
 
   const conflicts: IdentityConflict[] = (data.conflicts ?? []).map((c) => ({
     field: c.field,
-    profile_value: c.profile_value ?? null,
+    claimed_value: c.candidate_value ?? null,
+    // Discovery is the model proposing people; nothing it reports here has
+    // been established yet. Provenance is resolved during verification.
+    claimed_provenance: 'CANDIDATE' as const,
     public_value: c.public_value ?? null,
     explanation: c.explanation ?? '',
     sources: (c.sources ?? []).filter((u) => retrieved.has(u)),

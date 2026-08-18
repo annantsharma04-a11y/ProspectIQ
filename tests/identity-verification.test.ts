@@ -59,7 +59,7 @@ describe('1. corroborated identity → VERIFIED', () => {
 describe('2-3. conflicting identity attributes → AMBIGUOUS', () => {
   const conflict = (field: IdentityConflict['field'], profileValue: string, publicValue: string): IdentityConflict => ({
     field,
-    profile_value: profileValue,
+    claimed_value: profileValue, claimed_provenance: 'PROFILE' as const,
     public_value: publicValue,
     explanation: 'Sources describe a different current employer for this name.',
     sources: ['https://example.com/other'],
@@ -185,7 +185,7 @@ describe('6-10. manual candidate selection', () => {
         selected: chosen,
         selectionMethod: 'USER_CONFIRMED',
         conflicts: [
-          { field: 'company', profile_value: 'Almasons', public_value: 'Northwind Brokerage', explanation: 'x', sources: [] },
+          { field: 'company', claimed_value: 'Almasons', claimed_provenance: 'PROFILE' as const, public_value: 'Northwind Brokerage', explanation: 'x', sources: [] },
         ],
       }),
     );
@@ -241,7 +241,7 @@ describe('6-10. manual candidate selection', () => {
         conflicts: [
           {
             field: 'company',
-            profile_value: 'Contoso Systems',
+            claimed_value: 'Contoso Systems', claimed_provenance: 'PROFILE' as const,
             public_value: 'Fabrikam Holdings',
             explanation: 'Two unrelated employers reported for the same name.',
             sources: ['https://example.com/x'],
@@ -283,7 +283,7 @@ describe('6-10. manual candidate selection', () => {
 describe('11-14. identity failure is not qualification failure', () => {
   it('14. an unverified identity never reaches qualification', () => {
     const v = decideIdentity(
-      input({ conflicts: [{ field: 'company', profile_value: 'A', public_value: 'B', explanation: 'x', sources: [] }] }),
+      input({ conflicts: [{ field: 'company', claimed_value: 'A', claimed_provenance: 'PROFILE' as const, public_value: 'B', explanation: 'x', sources: [] }] }),
     );
     // The gate the executor checks.
     expect(v.proceed).toBe(false);
@@ -423,7 +423,7 @@ describe('field accounting is honest about what was checked', () => {
 
   it('does not count a conflicting field as corroborated', () => {
     const fe = accountFields(full, ['name', 'role', 'company', 'location'], [
-      { field: 'company', profile_value: 'A', public_value: 'B', explanation: 'x', sources: [] },
+      { field: 'company', claimed_value: 'A', claimed_provenance: 'PROFILE' as const, public_value: 'B', explanation: 'x', sources: [] },
     ]);
     expect(fe.corroborated).not.toContain('company');
     expect(fe.conflicting).toEqual(['company']);

@@ -33,7 +33,7 @@ describe('1. strong candidate', () => {
 describe('2. candidate with a conflict', () => {
   const conflict: IdentityConflict = {
     field: 'company',
-    profile_value: 'Almasons',
+    claimed_value: 'Almasons', claimed_provenance: 'PROFILE' as const,
     public_value: 'Northwind Brokerage',
     explanation: 'Two employers reported for this name.',
     sources: ['https://example.com/x'],
@@ -48,7 +48,7 @@ describe('2. candidate with a conflict', () => {
   it('names both conflicting fields when role and company disagree', () => {
     const roleConflict: IdentityConflict = {
       field: 'role',
-      profile_value: 'Software Developer',
+      claimed_value: 'Software Developer', claimed_provenance: 'PROFILE' as const,
       public_value: 'Founder & CEO',
       explanation: 'Different roles reported.',
       sources: [],

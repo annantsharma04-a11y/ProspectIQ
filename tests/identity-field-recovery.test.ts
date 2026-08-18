@@ -228,7 +228,7 @@ describe('6-7. thresholds and safeguards are unchanged', () => {
 
     // A candidate that was already failing for a different reason still fails.
     const conflicted = decide(candidate({ role: 'CEO' }), [
-      { field: 'company', profile_value: 'A', public_value: 'B', explanation: 'x', sources: [] },
+      { field: 'company', claimed_value: 'A', claimed_provenance: 'PROFILE' as const, public_value: 'B', explanation: 'x', sources: [] },
     ] as never);
     expect(conflicted.status).toBe('AMBIGUOUS');
   });

@@ -15,6 +15,15 @@ import { renderSources } from '@/lib/llm/analyze';
 import type { NormalizedSource } from '@/lib/research/normalize';
 import type { IdentityCandidate, IdentityConflict } from './types';
 
+/** Shape the model returns, before provenance is applied. */
+interface RawConflict {
+  field: IdentityConflict['field'];
+  candidate_value?: string | null;
+  public_value?: string | null;
+  explanation?: string;
+  sources?: string[];
+}
+
 const SYSTEM = `You verify a single claimed identity against independent public evidence.
 
 You are given ONE candidate — a specific person with a name, and usually a role,
@@ -26,7 +35,9 @@ WHAT TO REPORT
     (name, role, company, location). Only list a field when a supplied source
     actually shows it for THIS person.
   conflicts — where a source contradicts the candidate on company or role. Give
-    the candidate's value, the source's value, and cite the source.
+    the CANDIDATE's value (candidate_value), the source's value, and cite the
+    source. candidate_value is the value you were given above — never describe
+    it as coming from the profile provider.
   assessed_confidence — 0-100, how strongly the evidence supports this being the
     right person for the submitted profile.
   missing_fields — material fields (company, role) no source establishes.
@@ -55,7 +66,7 @@ const SCHEMA: JsonSchema = {
         type: 'object',
         properties: {
           field: { type: 'string', enum: ['company', 'role', 'name', 'location'] },
-          profile_value: { type: 'string', nullable: true },
+          candidate_value: { type: 'string', nullable: true },
           public_value: { type: 'string', nullable: true },
           explanation: { type: 'string' },
           sources: { type: 'array', items: { type: 'string' } },
@@ -104,7 +115,7 @@ Does independent evidence support that this candidate is the person the submitte
   const { data, meta } = await callStructured<{
     corroborated_fields?: string[];
     supporting_sources?: string[];
-    conflicts: IdentityConflict[];
+    conflicts: RawConflict[];
     assessed_confidence: number;
     missing_fields?: string[];
     summary?: string;
@@ -118,7 +129,11 @@ Does independent evidence support that this candidate is the person the submitte
 
   const conflicts: IdentityConflict[] = (data.conflicts ?? []).map((x) => ({
     field: x.field,
-    profile_value: x.profile_value ?? null,
+    claimed_value: x.candidate_value ?? null,
+    // The verifier compares the CANDIDATE it was handed. Provenance is settled
+    // by reconcileProvenance, which knows whether that value originated with
+    // the profile provider, the user, or the discovery model.
+    claimed_provenance: 'CANDIDATE' as const,
     public_value: x.public_value ?? null,
     explanation: x.explanation ?? '',
     sources: (x.sources ?? []).filter((u) => retrieved.has(u)),
