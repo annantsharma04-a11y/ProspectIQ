@@ -2,6 +2,9 @@ import { serve } from 'inngest/next';
 import { NextResponse, type NextRequest } from 'next/server';
 import { inngest } from '@/inngest/client';
 import { runOutreachPipeline } from '@/inngest/functions/run-outreach-pipeline';
+import { retryAnalysisPipeline } from '@/inngest/functions/retry-analysis';
+import { regenerateMessagePipeline } from '@/inngest/functions/regenerate-message';
+import { resumeIdentityPipeline } from '@/inngest/functions/resume-identity';
 
 // Durable-execution endpoint. It is an invocation path into the pipeline, so it
 // bypasses the session guards the other routes use — Inngest authenticates by
@@ -17,7 +20,7 @@ const enabled =
 const handlers = enabled
   ? serve({
       client: inngest,
-      functions: [runOutreachPipeline],
+      functions: [runOutreachPipeline, retryAnalysisPipeline, regenerateMessagePipeline, resumeIdentityPipeline],
     })
   : null;
 

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { retryRun } from '@/lib/pipeline/execute';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { requireOwnedRun } from '@/lib/auth/guard';
+import { inngest, OUTREACH_RUN_REQUESTED } from '@/inngest/client';
 
 export const runtime = 'nodejs';
 
@@ -24,6 +25,15 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     return NextResponse.json({ error: 'Rate limit exceeded. Try again later.' }, { status: 429 });
   }
 
-  retryRun(id).catch((err) => console.error(`[run ${id}] retry error:`, err));
+  // retryRun() does nothing but call executePipeline(runId) again from
+  // validate_input — the exact operation OUTREACH_RUN_REQUESTED's Inngest
+  // function already performs — so a retry reuses that same durable path
+  // rather than a fire-and-forget call that a frozen serverless invocation
+  // could cut off mid-stage.
+  if (process.env.USE_INNGEST === 'true') {
+    await inngest.send({ name: OUTREACH_RUN_REQUESTED, data: { runId: id } });
+  } else {
+    retryRun(id).catch((err) => console.error(`[run ${id}] retry error:`, err));
+  }
   return NextResponse.json({ ok: true }, { status: 202 });
 }

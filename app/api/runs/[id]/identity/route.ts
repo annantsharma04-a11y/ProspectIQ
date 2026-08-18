@@ -4,6 +4,7 @@ import { requireOwnedRun } from '@/lib/auth/guard';
 import { applyUserSelection } from '@/lib/identity/types';
 import { resumeAfterIdentity } from '@/lib/pipeline/execute';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { inngest, OUTREACH_IDENTITY_RESUME_REQUESTED } from '@/inngest/client';
 
 export const runtime = 'nodejs';
 
@@ -69,6 +70,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     });
   }
 
-  resumeAfterIdentity(id).catch((err) => console.error(`[run ${id}] resume error:`, err));
+  // resumeAfterIdentity() resumes at verify_identity with the human's chosen
+  // candidate (already persisted above) — a different operation from a fresh
+  // run, so it gets its own durable Inngest path rather than reusing
+  // OUTREACH_RUN_REQUESTED (which restarts from validate_input).
+  if (process.env.USE_INNGEST === 'true') {
+    await inngest.send({ name: OUTREACH_IDENTITY_RESUME_REQUESTED, data: { runId: id } });
+  } else {
+    resumeAfterIdentity(id).catch((err) => console.error(`[run ${id}] resume error:`, err));
+  }
   return NextResponse.json({ ok: true, resumed: true, status: verification.status }, { status: 202 });
 }

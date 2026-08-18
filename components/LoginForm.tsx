@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createBrowserSupabase } from '@/lib/supabase/client';
+import { safeNextPath } from '@/lib/auth/safe-next-path';
 
 // Underline-only field: no box, no fill — a hairline bottom border that turns
 // accent-colored on focus. Presentation only; every prop below is unchanged.
@@ -50,7 +51,11 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
       return;
     }
 
-    router.push(nextPath);
+    // Re-validated here too: nextPath already came sanitized from the server
+    // page, but router.push() is a second place a malicious/unsanitized value
+    // could otherwise reach the browser's location, so this component never
+    // trusts its prop alone.
+    router.push(safeNextPath(nextPath));
     router.refresh();
   }
 

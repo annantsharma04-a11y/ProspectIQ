@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { retryAnalysis } from '@/lib/pipeline/execute';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { requireOwnedRun } from '@/lib/auth/guard';
+import { inngest, OUTREACH_ANALYSIS_RETRY_REQUESTED } from '@/inngest/client';
 
 export const runtime = 'nodejs';
 
@@ -31,6 +32,14 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     return NextResponse.json({ error: 'Rate limit exceeded. Try again later.' }, { status: 429 });
   }
 
-  retryAnalysis(id).catch((err) => console.error(`[run ${id}] analysis retry error:`, err));
+  // retryAnalysis() resumes from evaluate_signals onward, rehydrating the
+  // already-persisted profile and sources — a different operation from a
+  // fresh run, so it gets its own durable Inngest path rather than reusing
+  // OUTREACH_RUN_REQUESTED (which restarts from validate_input).
+  if (process.env.USE_INNGEST === 'true') {
+    await inngest.send({ name: OUTREACH_ANALYSIS_RETRY_REQUESTED, data: { runId: id } });
+  } else {
+    retryAnalysis(id).catch((err) => console.error(`[run ${id}] analysis retry error:`, err));
+  }
   return NextResponse.json({ ok: true }, { status: 202 });
 }

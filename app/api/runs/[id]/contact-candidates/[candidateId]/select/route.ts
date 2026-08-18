@@ -1,6 +1,12 @@
 import { NextResponse } from 'next/server';
 import { requireOwnedContactCandidate } from '@/lib/auth/guard';
-import { createRun, findOrCreateProspect, updateContactCandidate } from '@/lib/supabase/queries';
+import {
+  claimContactCandidateForSelection,
+  createRun,
+  findOrCreateProspect,
+  getContactCandidate,
+  updateContactCandidate,
+} from '@/lib/supabase/queries';
 import { parseLinkedInUrl } from '@/lib/linkedin/url';
 import { research } from '@/lib/research/engine';
 import { identityQueries } from '@/lib/research/queries';
@@ -10,6 +16,7 @@ import type { IdentityCandidate } from '@/lib/identity/types';
 import { executePipeline } from '@/lib/pipeline/execute';
 import { checkRateLimit } from '@/lib/rate-limit';
 import type { ContactCandidateStatus } from '@/lib/contacts/types';
+import { inngest, OUTREACH_RUN_REQUESTED } from '@/inngest/client';
 
 export const runtime = 'nodejs';
 
@@ -45,7 +52,22 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return NextResponse.json({ error: 'Rate limit exceeded. Try again later.' }, { status: 429 });
   }
 
-  await updateContactCandidate(candidateId, { selected_at: new Date().toISOString() });
+  // Atomic claim: only the first of two simultaneous requests for this
+  // candidate gets a row back. A second, racing request stops here — before
+  // any paid verification call or run creation — rather than duplicating
+  // both the spend and the run. See claimContactCandidateForSelection().
+  const claimed = await claimContactCandidateForSelection(candidateId);
+  if (!claimed) {
+    // Ownership of this candidate was already confirmed above; only its
+    // resolution state may have changed since, by whichever request won the
+    // race, so a plain re-read (not another ownership check) is all this needs.
+    const current = await getContactCandidate(candidateId);
+    return NextResponse.json({
+      identity_status: current?.identity_status ?? candidate.identity_status,
+      resulting_run_id: current?.resulting_run_id ?? candidate.resulting_run_id,
+      already_resolved: true,
+    });
+  }
 
   // No LinkedIn URL means no research target under this system's identity
   // model — refusing rather than guessing which profile this person owns.
@@ -158,7 +180,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   await updateContactCandidate(candidateId, { resulting_run_id: run.id });
 
-  executePipeline(run.id).catch((err) => console.error(`[run ${run.id}] pipeline error:`, err));
+  // Same dispatch as POST /api/runs: in production (USE_INNGEST=true) this MUST
+  // go through Inngest, not a fire-and-forget call. A serverless invocation is
+  // not guaranteed to keep running once this handler's response has been sent —
+  // an un-awaited executePipeline() here can be frozen mid-stage (observed:
+  // stuck forever at identify_prospect), where Inngest's durable, out-of-band
+  // execution is unaffected by this request's lifecycle.
+  if (process.env.USE_INNGEST === 'true') {
+    await inngest.send({ name: OUTREACH_RUN_REQUESTED, data: { runId: run.id } });
+  } else {
+    executePipeline(run.id).catch((err) => console.error(`[run ${run.id}] pipeline error:`, err));
+  }
 
   return NextResponse.json(
     { identity_status: status, verification, run_id: run.id, prospect_id: run.prospect_id },

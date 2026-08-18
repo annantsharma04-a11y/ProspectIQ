@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { regenerateMessageOnly } from '@/lib/pipeline/execute';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { requireOwnedRun } from '@/lib/auth/guard';
+import { inngest, OUTREACH_MESSAGE_REGENERATE_REQUESTED } from '@/inngest/client';
 
 export const runtime = 'nodejs';
 
@@ -33,6 +34,14 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     return NextResponse.json({ error: 'Rate limit exceeded. Try again later.' }, { status: 429 });
   }
 
-  regenerateMessageOnly(id).catch((err) => console.error(`[run ${id}] message regeneration error:`, err));
+  // regenerateMessageOnly() reuses the existing hook/research and forces one
+  // fresh model call — a different operation from a fresh run, so it gets its
+  // own durable Inngest path rather than reusing OUTREACH_RUN_REQUESTED
+  // (which restarts from validate_input).
+  if (process.env.USE_INNGEST === 'true') {
+    await inngest.send({ name: OUTREACH_MESSAGE_REGENERATE_REQUESTED, data: { runId: id } });
+  } else {
+    regenerateMessageOnly(id).catch((err) => console.error(`[run ${id}] message regeneration error:`, err));
+  }
   return NextResponse.json({ ok: true }, { status: 202 });
 }

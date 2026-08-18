@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { getAuthenticatedUser } from '@/lib/supabase/server';
 import { LoginForm } from '@/components/LoginForm';
+import { safeNextPath } from '@/lib/auth/safe-next-path';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,12 +11,14 @@ export default async function LoginPage({
   searchParams: Promise<{ next?: string }>;
 }) {
   const { next } = await searchParams;
-  const user = await getAuthenticatedUser();
-  if (user) redirect(next && next.startsWith('/') ? next : '/');
 
-  // Unchanged from before — still the one place `next` is validated before
-  // being trusted anywhere on this page.
-  const nextPath = next && next.startsWith('/') ? next : '/';
+  // Still the one place `next` is validated before being trusted anywhere on
+  // this page — now rejecting protocol-relative URLs ("//evil.com") as well
+  // as absolute ones, not just requiring a leading "/".
+  const nextPath = safeNextPath(next);
+
+  const user = await getAuthenticatedUser();
+  if (user) redirect(nextPath);
 
   return (
     // -mx-6 -my-6 cancels the shared layout's <main> padding so this split

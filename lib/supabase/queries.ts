@@ -488,3 +488,32 @@ export async function updateContactCandidate(
   const { error } = await supabase.from('contact_candidates').update(patch).eq('id', candidateId);
   if (error) throw error;
 }
+
+/**
+ * Atomically claim a DISCOVERED candidate for selection.
+ *
+ * A plain read-then-write ("is identity_status still DISCOVERED?" followed by
+ * a separate update) is a TOCTOU race: two near-simultaneous POSTs to the
+ * select endpoint can both read DISCOVERED before either write lands, and
+ * both go on to run paid verification and create a run for the same
+ * candidate. Gating the UPDATE itself on `selected_at is null` makes the
+ * claim atomic — Postgres serializes concurrent UPDATEs on the same row, so
+ * only the first one to commit affects a row; the second re-evaluates the
+ * WHERE clause against the now-committed `selected_at` and matches nothing.
+ * Returns the claimed row, or null if some other request already claimed (or
+ * previously attempted) this candidate first.
+ */
+export async function claimContactCandidateForSelection(
+  candidateId: string,
+): Promise<ContactCandidateRow | null> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from('contact_candidates')
+    .update({ selected_at: new Date().toISOString() })
+    .eq('id', candidateId)
+    .is('selected_at', null)
+    .select()
+    .maybeSingle();
+  if (error) throw error;
+  return (data as ContactCandidateRow) ?? null;
+}
