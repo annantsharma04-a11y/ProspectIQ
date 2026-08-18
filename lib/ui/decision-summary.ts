@@ -10,6 +10,7 @@
 
 import type { RunRow } from '@/lib/types';
 import { companyFitState, prospectFitState, type FitState, type QualificationAction } from '@/lib/qualification/types';
+import type { StatusTone } from '@/components/StatusBadge';
 
 /** The five canonical actions of the product's decision matrix. */
 export type DecisionAction =
@@ -36,6 +37,15 @@ const DECISION_ACTION: Record<QualificationAction, DecisionAction> = {
   EXPLORATORY_OUTREACH: 'EXPLORATORY OUTREACH',
   EXPLORATORY_OUTREACH_IF_SIGNAL: 'EXPLORATORY OUTREACH',
   DO_NOT_CONTACT: 'DO NOT CONTACT',
+};
+
+/** Shared tone mapping for the five actions — one place, every consumer (DecisionSummary, the homepage command center) renders the same colors for the same action. */
+export const ACTION_TONE: Record<DecisionAction, StatusTone> = {
+  'TARGET DIRECTLY': 'emerald',
+  'VERIFY BETTER CONTACT': 'amber',
+  'FIND BETTER CONTACT': 'amber',
+  'EXPLORATORY OUTREACH': 'accent',
+  'DO NOT CONTACT': 'neutral',
 };
 
 export interface DecisionSummaryData {

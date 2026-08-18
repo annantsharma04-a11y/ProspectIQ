@@ -3,6 +3,7 @@ import { notFound, redirect } from 'next/navigation';
 import {
   getRun,
   getStage,
+  getDraft,
   listSignals,
   listSources,
   listStages,
@@ -41,11 +42,18 @@ export default async function StagePage({
   // neither contacts a provider or a model.
   const needsSources = stageNeedsSources(stage);
   const isContactDiscovery = stage === 'find_contact_candidates';
-  const [all, sources, signals, contactCandidates] = await Promise.all([
+  // Only generate_message renders a draft, and it must be the SAME draft row
+  // the main run page reads — fetched here rather than derived from this
+  // stage's own `output`, which is a point-in-time snapshot that regeneration,
+  // claim validation and manual edits all move past. See StageDetail's
+  // `currentText` for how this and the main page end up byte-identical.
+  const needsDraft = stage === 'generate_message';
+  const [all, sources, signals, contactCandidates, draft] = await Promise.all([
     listStages(id),
     needsSources ? listSources(id) : Promise.resolve([]),
     needsSources ? listSignals(id) : Promise.resolve([]),
     isContactDiscovery ? listContactCandidates(id) : Promise.resolve([]),
+    needsDraft ? getDraft(id) : Promise.resolve(null),
   ]);
   // find_contact_candidates is a real stage but a no-op on every run except
   // the one specific state (company qualified, contact not) — prev/next
@@ -76,6 +84,7 @@ export default async function StagePage({
       <StageDetail
         run={run}
         stage={row}
+        draft={draft}
         sources={sources}
         signals={signals}
         contactCandidates={contactCandidates}

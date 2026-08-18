@@ -35,7 +35,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
               Prospect<span className="text-accent">IQ</span>
             </Link>
             <nav className="flex items-center gap-5 text-sm font-medium text-muted">
-              <Link href="/" className="hover:text-accent">New run</Link>
+              <Link href="/new" className="hover:text-accent">New run</Link>
               <Link href="/history" className="hover:text-accent">History</Link>
               <Link href="/evaluation" className="hover:text-accent">Evaluation</Link>
               <span className="flex items-center gap-1.5 rounded-full bg-accent/8 px-2.5 py-1 text-xs font-medium text-accent">

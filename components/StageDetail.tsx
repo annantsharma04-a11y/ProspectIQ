@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   STAGE_LABELS,
+  type DraftRow,
   type RunRow,
   type RunStageRow,
   type SignalRow,
@@ -17,6 +18,7 @@ import type { ContactCandidateRow } from '@/lib/contacts/types';
 import type { EvidenceItem } from '@/lib/qualification/types';
 import { findSourceByUrl, displayDate } from '@/lib/research/top-sources';
 import { hostOf } from '@/lib/url-identity';
+import { currentDraftText } from '@/lib/drafts/current-text';
 
 // Human-readable stage explanations.
 //
@@ -192,17 +194,56 @@ function SourceLine({ source }: { source: SourceRow }) {
  * the stage detail page itself.
  *
  * This page has no live subscription of its own (unlike the main run page's
- * LiveRunView), so "show the new draft immediately" is done by polling the
- * run's own status after the fire-and-forget POST settles, then asking the
- * server component that owns this page to re-fetch via `router.refresh()` —
- * which pulls in the regenerated stage's freshly persisted `output`.
+ * LiveRunView, which watches the run over Supabase Realtime), so "show the
+ * new draft immediately" is done by polling the run's own status after the
+ * fire-and-forget POST, then asking the server component that owns this page
+ * to re-fetch via `router.refresh()` — which pulls in the regenerated
+ * draft's freshly persisted text.
+ *
+ * The polling loop must not conclude "settled" from the first read that
+ * simply isn't `running` — `regenerateMessageOnly()` does real work
+ * (rehydrating the run, then writing `status: 'running'`) BEFORE that status
+ * change actually lands in Postgres, so an early poll can read the run's
+ * PREVIOUS terminal status and mistake "hasn't started yet" for "already
+ * finished". That false read is what made the button flip back to "Regenerate
+ * message" almost immediately while the real regeneration was still running
+ * in the background — the first click looked like a no-op, and a second
+ * click was needed to actually see anything change. The fix: only trust a
+ * non-running read once we have genuinely observed `running` at least once
+ * (or a short grace period has passed, in case the whole job — rehydrate,
+ * model call, validate — finishes inside a single poll interval).
  */
+
+/** Generous margin over the rehydrate-then-write-'running' latency before the job has had any real chance to start. */
+export const REGENERATION_SETTLE_GRACE_MS = 3000;
+
+/**
+ * Pure decision at the heart of the fix above — exported so it is directly
+ * testable without a browser: given the latest polled status, whether we've
+ * ever observed `running` in this polling session, and how long it has been
+ * since the click, should THIS poll be treated as "the job has settled"?
+ *
+ * A `false` result means "keep polling" — either the job is genuinely still
+ * running, or it hasn't had a fair chance to start yet and this status read
+ * cannot be trusted as final.
+ */
+export function shouldTreatAsSettled(
+  status: string | undefined,
+  sawRunning: boolean,
+  elapsedMs: number,
+  graceMs: number = REGENERATION_SETTLE_GRACE_MS,
+): boolean {
+  if (status === 'running') return false;
+  return sawRunning || elapsedMs >= graceMs;
+}
+
 function RegenerateMessageButton({ runId }: { runId: string }) {
   const router = useRouter();
   const [state, setState] = useState<'idle' | 'working' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
 
   async function regenerate() {
+    if (state === 'working') return; // belt-and-braces against a double click racing the disabled state
     setState('working');
     setError(null);
     try {
@@ -210,13 +251,21 @@ function RegenerateMessageButton({ runId }: { runId: string }) {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? 'Could not start regeneration.');
 
+      const startedAt = Date.now();
+      let sawRunning = false;
+
       // Poll for the background job to settle — up to a minute — then refresh.
-      for (let attempt = 0; attempt < 40; attempt++) {
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+      for (let attempt = 0; attempt < 60; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         const check = await fetch(`/api/runs/${runId}`, { cache: 'no-store' });
         if (!check.ok) continue;
         const snapshot = await check.json();
-        if (snapshot.run?.status === 'running') continue;
+        const status = snapshot.run?.status as string | undefined;
+
+        if (!shouldTreatAsSettled(status, sawRunning, Date.now() - startedAt)) {
+          if (status === 'running') sawRunning = true;
+          continue;
+        }
 
         // error is explicitly cleared on success and explicitly set on
         // failure by regenerateMessageOnly() — never stale from before this
@@ -244,8 +293,15 @@ function RegenerateMessageButton({ runId }: { runId: string }) {
         type="button"
         onClick={regenerate}
         disabled={state === 'working'}
-        className="rounded-lg border border-hairline px-3 py-1.5 text-xs font-medium text-muted hover:bg-app disabled:opacity-50"
+        aria-busy={state === 'working'}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-hairline px-3 py-1.5 text-xs font-medium text-muted hover:bg-app disabled:cursor-not-allowed disabled:opacity-50"
       >
+        {state === 'working' && (
+          <span
+            aria-hidden
+            className="h-3 w-3 animate-spin rounded-full border-2 border-muted/40 border-t-muted"
+          />
+        )}
         {state === 'working' ? 'Regenerating…' : 'Regenerate message'}
       </button>
       {state === 'working' && (
@@ -279,12 +335,20 @@ function Stat({ label, value, tone = 'neutral' }: { label: string; value: React.
 export function StageDetail({
   run,
   stage,
+  draft = null,
   sources = [],
   signals = [],
   contactCandidates = [],
 }: {
   run: RunRow;
   stage: RunStageRow;
+  /**
+   * The run's current draft row — the same one the main run page's
+   * Personalized draft card reads. Passed through so the generate_message
+   * stage shows this text, not its own stage-output snapshot, which is why
+   * this and the main page could previously disagree (see StageBody below).
+   */
+  draft?: DraftRow | null;
   /** Persisted sources for this run. Already loaded; nothing is re-fetched. */
   sources?: SourceRow[];
   /** Verified signals, used only to mark which sources became evidence. */
@@ -343,7 +407,7 @@ export function StageDetail({
           </Section>
         )}
 
-        <StageBody name={name} output={output} run={run} sources={sources} signals={signals} contactCandidates={contactCandidates} />
+        <StageBody name={name} output={output} run={run} draft={draft} sources={sources} signals={signals} contactCandidates={contactCandidates} />
 
         <Section title="Technical details">
           <div className="flex items-center gap-2">
@@ -378,6 +442,7 @@ function StageBody({
   name,
   output,
   run,
+  draft,
   sources,
   signals,
   contactCandidates,
@@ -385,6 +450,7 @@ function StageBody({
   name: StageName;
   output: Output | null;
   run: RunRow;
+  draft: DraftRow | null;
   sources: SourceRow[];
   signals: SignalRow[];
   contactCandidates: ContactCandidateRow[];
@@ -1202,6 +1268,18 @@ function StageBody({
 
       const gate = get<Output>(output, 'personalization_gate');
       const opener = get<Output>(output, 'opener_check');
+
+      // The SAME current draft the main run page's Personalized draft card
+      // shows — computed by the same shared function (lib/drafts/current-text.ts)
+      // so the two pages cannot disagree. This stage's own `output.message_text`
+      // is a snapshot of what generate_message produced at the moment it ran;
+      // it does not move when the draft is later regenerated, revised or
+      // edited, so showing it here would let this page silently disagree with
+      // the main page. `output.message_text` is kept only as a fallback for
+      // the case no draft row exists at all.
+      const currentText = draft ? currentDraftText(draft) : get<string>(output, 'message_text');
+      const currentWordCount = currentText ? currentText.trim().split(/\s+/).filter(Boolean).length : null;
+
       return (
         <>
           <RegenerateMessageButton runId={run.id} />
@@ -1212,11 +1290,14 @@ function StageBody({
               <Row label="Personalisation basis" value={get<string>(output, 'outreach_angle')} />
             </dl>
             <p className="mt-3 whitespace-pre-wrap rounded-lg bg-app p-3 text-sm leading-relaxed text-ink/90">
-              {get<string>(output, 'message_text')}
+              {currentText}
             </p>
-            {get<number>(output, 'word_count') ? (
-              <p className="mt-1.5 text-xs text-faint">{get<number>(output, 'word_count')} words</p>
+            {currentWordCount ? (
+              <p className="mt-1.5 text-xs text-faint">{currentWordCount} words</p>
             ) : null}
+            <p className="mt-1.5 text-xs text-faint">
+              Same draft shown in Personalized draft on the run page.
+            </p>
           </Section>
 
           {opener ? (

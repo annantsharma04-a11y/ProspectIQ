@@ -1,5 +1,5 @@
 import { StatusBadge, type StatusTone } from './StatusBadge';
-import { buildDecisionSummary, type DecisionAction } from '@/lib/ui/decision-summary';
+import { buildDecisionSummary, ACTION_TONE } from '@/lib/ui/decision-summary';
 import type { FitState } from '@/lib/qualification/types';
 import type { RunRow } from '@/lib/types';
 
@@ -7,14 +7,6 @@ const FIT_TONE: Record<FitState, StatusTone> = {
   QUALIFIED: 'emerald',
   BORDERLINE: 'amber',
   NOT_QUALIFIED: 'neutral',
-};
-
-const ACTION_TONE: Record<DecisionAction, StatusTone> = {
-  'TARGET DIRECTLY': 'emerald',
-  'VERIFY BETTER CONTACT': 'amber',
-  'FIND BETTER CONTACT': 'amber',
-  'EXPLORATORY OUTREACH': 'accent',
-  'DO NOT CONTACT': 'neutral',
 };
 
 /**

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { DraftRow, RunRow } from '@/lib/types';
+import { currentDraftText } from '@/lib/drafts/current-text';
 
 /** Strip internal "[automatic]" markers from reader-facing text. */
 function humanize(text: string): string {
@@ -41,7 +42,7 @@ export function DraftReviewCard({
   draft: DraftRow;
   onReviewed: () => void;
 }) {
-  const reviewedText = draft.edited_text ?? draft.final_text ?? draft.message_text;
+  const reviewedText = currentDraftText(draft);
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(reviewedText);
   const [busy, setBusy] = useState(false);

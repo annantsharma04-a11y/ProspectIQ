@@ -1,8 +1,7 @@
 import { notFound, redirect } from 'next/navigation';
 import { getRun, listStages, listSignals, listSources, getDraft, listContactCandidates } from '@/lib/supabase/queries';
 import { getAuthenticatedUser } from '@/lib/supabase/server';
-import { Workspace } from '@/components/Workspace';
-import { RecentRuns } from '@/components/RecentRuns';
+import { RunDetail } from '@/components/RunDetail';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,10 +25,5 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
     listContactCandidates(id).catch(() => []),
   ]);
 
-  return (
-    <Workspace
-      initial={{ run, stages, signals, sources, draft, contactCandidates }}
-      recentRuns={<RecentRuns />}
-    />
-  );
+  return <RunDetail initial={{ run, stages, signals, sources, draft, contactCandidates }} />;
 }
