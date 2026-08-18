@@ -86,19 +86,19 @@ export default async function EvaluationPage({
     <div className="space-y-6">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">ProspectIQ performance</h1>
-          <p className="mt-1 max-w-2xl text-sm text-slate-600">
+          <h1 className="font-display text-2xl font-semibold tracking-tight text-ink">ProspectIQ performance</h1>
+          <p className="mt-1 max-w-2xl text-sm text-muted">
             Evidence-verified prospect research and outreach drafting, held for human review.
             Every figure below is computed from stored run data.
           </p>
         </div>
-        <nav className="flex gap-1 rounded-lg border border-slate-200 bg-white p-1 text-sm">
+        <nav className="flex gap-1 rounded-lg border border-hairline bg-surface p-1 text-sm">
           {PERIODS.map((p) => (
             <Link
               key={p}
               href={`/evaluation?period=${p}`}
               className={`rounded-md px-3 py-1.5 font-medium ${
-                p === period ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+                p === period ? 'bg-accent text-white' : 'text-muted hover:bg-ink/6'
               }`}
             >
               {PERIOD_LABEL[p]}
@@ -108,17 +108,17 @@ export default async function EvaluationPage({
       </header>
 
       {empty ? (
-        <p className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-500">
+        <p className="rounded-xl border border-dashed border-hairline p-8 text-center text-sm text-faint">
           No runs in this period. Pick a wider range, or start a run from{' '}
-          <Link href="/" className="font-medium text-indigo-600 hover:underline">New run</Link>.
+          <Link href="/" className="font-medium text-accent hover:underline">New run</Link>.
         </p>
       ) : (
         <>
           {/* ── primary performance ──────────────────────────────────────── */}
-          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <section className="rounded-xl border border-hairline bg-surface p-5">
             <div className="mb-4 flex items-baseline justify-between gap-3">
               <h2 className="text-sm font-semibold">Performance</h2>
-              <span className="text-xs text-slate-400">{PERIOD_LABEL[period]}</span>
+              <span className="text-xs text-faint">{PERIOD_LABEL[period]}</span>
             </div>
 
             <dl className="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-3 lg:grid-cols-6">
@@ -163,8 +163,8 @@ export default async function EvaluationPage({
               />
             </dl>
 
-            <p className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-slate-50 px-3 py-2.5 text-xs text-slate-600">
-              <span className="font-semibold text-slate-800">Human review required.</span>
+            <p className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-app px-3 py-2.5 text-xs text-muted">
+              <span className="font-semibold text-ink/90">Human review required.</span>
               <span>
                 Outreach is always sent manually. {messages.generated} drafts in this window,{' '}
                 {messages.awaitingReview} awaiting a person&rsquo;s decision.
@@ -174,7 +174,7 @@ export default async function EvaluationPage({
           </section>
 
           {/* ── what the data supports ───────────────────────────────────── */}
-          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <section className="rounded-xl border border-hairline bg-surface p-5">
             <h2 className="flex items-center gap-1.5 text-sm font-semibold">
               What ProspectIQ does well
               <InfoTip
@@ -184,11 +184,11 @@ export default async function EvaluationPage({
             </h2>
             <ul className="mt-3 grid gap-3 sm:grid-cols-2">
               {highlights.map((h) => (
-                <li key={h.claim} className="rounded-lg border border-slate-100 bg-slate-50/60 p-3">
-                  <p className="text-sm font-medium leading-snug text-slate-800">{h.claim}</p>
-                  <p className="mt-1 text-xs leading-relaxed text-slate-500">{h.basis}</p>
+                <li key={h.claim} className="rounded-lg border border-hairline bg-app/60 p-3">
+                  <p className="text-sm font-medium leading-snug text-ink/90">{h.claim}</p>
+                  <p className="mt-1 text-xs leading-relaxed text-faint">{h.basis}</p>
                   {h.byConstruction && (
-                    <p className="mt-1 text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                    <p className="mt-1 text-[11px] font-medium uppercase tracking-wide text-faint">
                       Enforced in code, not observed
                     </p>
                   )}
@@ -198,7 +198,7 @@ export default async function EvaluationPage({
           </section>
 
           {/* ── pipeline at a glance ─────────────────────────────────────── */}
-          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <section className="rounded-xl border border-hairline bg-surface p-5">
             <h2 className="flex items-center gap-1.5 text-sm font-semibold">
               Pipeline at a glance
               <InfoTip
@@ -206,17 +206,17 @@ export default async function EvaluationPage({
                 definition={PANEL_DEFINITIONS['Pipeline at a glance']}
               />
             </h2>
-            <p className="mb-3 mt-0.5 text-xs text-slate-500">
+            <p className="mb-3 mt-0.5 text-xs text-faint">
               Milestones, not gates. A run can legitimately end early when no public evidence
               supports outreach.
             </p>
             <ol className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
               {steps4.map((m, i) => (
-                <li key={m.label} className="rounded-lg bg-slate-50 px-3 py-2.5" title={m.definition}>
+                <li key={m.label} className="rounded-lg bg-app px-3 py-2.5" title={m.definition}>
                   <p className="text-2xl font-bold tabular-nums tracking-tight">{m.count}</p>
-                  <p className="text-xs leading-snug text-slate-600">{m.label}</p>
+                  <p className="text-xs leading-snug text-muted">{m.label}</p>
                   {i > 0 && steps4[i - 1].count > 0 && (
-                    <p className="mt-0.5 text-[11px] tabular-nums text-slate-400">
+                    <p className="mt-0.5 text-[11px] tabular-nums text-faint">
                       {Math.round((m.count / steps4[i - 1].count) * 1000) / 10}% of previous
                     </p>
                   )}
@@ -226,24 +226,24 @@ export default async function EvaluationPage({
           </section>
 
           {/* ── diagnostics: everything, at its original values ──────────── */}
-          <details className="group rounded-xl border border-slate-200 bg-white shadow-sm">
+          <details className="group rounded-xl border border-hairline bg-surface">
             <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-5">
               <span>
                 <span className="text-sm font-semibold">Diagnostics</span>
-                <span className="mt-0.5 block max-w-xl text-xs leading-relaxed text-slate-500">
+                <span className="mt-0.5 block max-w-xl text-xs leading-relaxed text-faint">
                   Detailed pipeline metrics used to understand system behaviour and identify areas
                   for improvement. Same calculations, same denominators, same rows as above.
                 </span>
               </span>
-              <span className="shrink-0 rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 group-open:hidden">
+              <span className="shrink-0 rounded-lg border border-hairline px-2.5 py-1 text-xs font-medium text-muted group-open:hidden">
                 Show
               </span>
-              <span className="hidden shrink-0 rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 group-open:inline-block">
+              <span className="hidden shrink-0 rounded-lg border border-hairline px-2.5 py-1 text-xs font-medium text-muted group-open:inline-block">
                 Hide
               </span>
             </summary>
 
-            <div className="space-y-6 border-t border-slate-100 p-5">
+            <div className="space-y-6 border-t border-hairline p-5">
             {/* ── bottleneck ───────────────────────────────────────────────── */}
             <BottleneckPanel bottleneck={bottleneck} />
 
@@ -258,21 +258,21 @@ export default async function EvaluationPage({
                   <li key={s.label}>
                     <div className="flex items-center gap-2 sm:gap-3">
                       <div
-                        className="w-32 shrink-0 truncate text-xs font-medium text-slate-700 sm:w-52 sm:text-sm"
+                        className="w-32 shrink-0 truncate text-xs font-medium text-ink/85 sm:w-52 sm:text-sm"
                         title={s.definition}
                       >
                         {s.label}
                       </div>
-                      <div className="h-6 min-w-0 flex-1 overflow-hidden rounded bg-slate-100">
+                      <div className="h-6 min-w-0 flex-1 overflow-hidden rounded bg-ink/6">
                         <div
-                          className="h-full bg-indigo-500/80"
+                          className="h-full bg-accent/80"
                           style={{ width: `${s.ofStart ?? 100}%` }}
                         />
                       </div>
                       <div className="w-10 shrink-0 text-right text-sm tabular-nums font-semibold sm:w-16">
                         {s.count}
                       </div>
-                      <div className="hidden w-36 shrink-0 text-right text-xs tabular-nums text-slate-500 md:block">
+                      <div className="hidden w-36 shrink-0 text-right text-xs tabular-nums text-faint md:block">
                         {i === 0
                           ? 'submitted'
                           : s.label === 'Approved after human review'
@@ -280,7 +280,7 @@ export default async function EvaluationPage({
                             : `${s.ofPrevious ?? 0}% of prev · ${s.ofStart ?? 0}% total`}
                       </div>
                     </div>
-                    <p className="ml-[8.5rem] text-[11px] tabular-nums text-slate-400 md:hidden">
+                    <p className="ml-[8.5rem] text-[11px] tabular-nums text-faint md:hidden">
                       {i === 0
                         ? 'submitted'
                         : s.label === 'Approved after human review'
@@ -291,7 +291,7 @@ export default async function EvaluationPage({
                 ))}
               </ol>
               {messages.reviewed === 0 && messages.generated > 0 && (
-                <p className="mt-3 border-t border-slate-100 pt-2.5 text-xs text-slate-500">
+                <p className="mt-3 border-t border-hairline pt-2.5 text-xs text-faint">
                   Approvals are zero because no draft has been reviewed yet. {messages.generated} drafts
                   are waiting in the review queue; this is a pending human step, not a pipeline failure.
                 </p>
@@ -305,23 +305,23 @@ export default async function EvaluationPage({
               tip={PANEL_DEFINITIONS['Failure analysis']}
             >
               {failures.length === 0 ? (
-                <p className="text-sm text-slate-500">Every run in this period reached a draft.</p>
+                <p className="text-sm text-faint">Every run in this period reached a draft.</p>
               ) : (
                 <div className="overflow-x-auto">
                 <table className="w-full min-w-[22rem] text-left text-sm">
-                  <thead className="text-xs uppercase tracking-wide text-slate-500">
+                  <thead className="text-xs uppercase tracking-wide text-faint">
                     <tr>
                       <th className="pb-2 font-medium">Reason</th>
                       <th className="pb-2 text-right font-medium">Runs</th>
                       <th className="pb-2 text-right font-medium">Share</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100">
+                  <tbody className="divide-y divide-hairline">
                     {failures.map((f) => (
                       <tr key={f.label}>
-                        <td className="py-1.5 text-slate-700" title={f.definition}>{f.label}</td>
+                        <td className="py-1.5 text-ink/85" title={f.definition}>{f.label}</td>
                         <td className="py-1.5 text-right tabular-nums">{f.count}</td>
-                        <td className="py-1.5 text-right tabular-nums text-slate-500">{f.share}%</td>
+                        <td className="py-1.5 text-right tabular-nums text-faint">{f.share}%</td>
                       </tr>
                     ))}
                   </tbody>
@@ -372,7 +372,7 @@ export default async function EvaluationPage({
                   total={identity.reached}
                 />
                 <RateLine label="Identity verification rate" r={identity.verificationRate} />
-                <p className="mt-2 text-xs text-slate-500">
+                <p className="mt-2 text-xs text-faint">
                   {identity.automatic} resolved automatically · {identity.userConfirmed} confirmed by a
                   human · denominator {identity.reached} runs reaching verification
                 </p>
@@ -390,7 +390,7 @@ export default async function EvaluationPage({
                   total={qual.reached}
                 />
                 <RateLine label="Qualification rate" r={qual.qualificationRate} />
-                <p className="mt-2 text-xs text-slate-500">
+                <p className="mt-2 text-xs text-faint">
                   UNKNOWN is reported separately and never counted as disqualified. Company evidence
                   basis:{' '}
                   {Object.entries(qual.companyEvidenceBasis)
@@ -408,7 +408,7 @@ export default async function EvaluationPage({
                 </div>
                 <RateLine label="Evidence-backed signal rate" r={evidence.evidenceBackedRate} />
                 <RateLine label="Citation verification" r={evidence.citationRate} />
-                <p className="mt-1 text-xs text-slate-500">
+                <p className="mt-1 text-xs text-faint">
                   {evidence.runsWithSignal} runs produced at least one verified signal.
                 </p>
               </Panel>
@@ -423,7 +423,7 @@ export default async function EvaluationPage({
                 <RateLine label="Hook acceptance rate" r={hooks.acceptanceRate} />
                 {Object.keys(hooks.byCategory).length > 0 && (
                   <div className="mt-3">
-                    <p className="mb-1 text-xs font-medium text-slate-500">Selected hooks by category</p>
+                    <p className="mb-1 text-xs font-medium text-faint">Selected hooks by category</p>
                     <Bars
                       data={Object.entries(hooks.byCategory).sort((a, b) => b[1] - a[1])}
                       total={hooks.selected}
@@ -445,7 +445,7 @@ export default async function EvaluationPage({
                   <Mini label="Rejected" value={messages.rejected} />
                 </div>
                 {messages.reviewed === 0 ? (
-                  <p className="mt-3 rounded bg-slate-50 px-2.5 py-2 text-xs text-slate-600">
+                  <p className="mt-3 rounded bg-app px-2.5 py-2 text-xs text-muted">
                     No draft has been reviewed yet, so approval and edit rates have no denominator.
                     Edits <em>are</em> recorded when they happen — this is an empty queue, not missing
                     instrumentation.
@@ -456,7 +456,7 @@ export default async function EvaluationPage({
                     <RateLine label="Edit rate" r={messages.editRate} />
                   </>
                 )}
-                <p className="mt-2 text-xs text-slate-500">
+                <p className="mt-2 text-xs text-faint">
                   {messages.personalized} personalized · {messages.conservative} conservative
                 </p>
               </Panel>
@@ -470,14 +470,14 @@ export default async function EvaluationPage({
                 </div>
                 <RateLine label="Factual claim pass rate" r={claims.passRate} />
                 <div className="mt-3">
-                  <p className="mb-1 text-xs font-medium text-slate-500">By claim type</p>
+                  <p className="mb-1 text-xs font-medium text-faint">By claim type</p>
                   <Bars
                     data={Object.entries(claims.byType).sort((a, b) => b[1] - a[1])}
                     total={claims.total}
                   />
                 </div>
                 {claims.uncategorised > 0 && (
-                  <p className="mt-2 text-xs text-slate-500">
+                  <p className="mt-2 text-xs text-faint">
                     {claims.uncategorised} claims predate claim typing and are excluded from the pass
                     rate rather than assumed factual.
                   </p>
@@ -494,17 +494,17 @@ export default async function EvaluationPage({
                   <Mini label="Median runtime" value={fmtMs(reliability.medianMs)} />
                   <Mini label="P95 runtime" value={fmtMs(reliability.p95Ms)} />
                 </div>
-                <p className="mt-2 text-xs text-slate-500">
+                <p className="mt-2 text-xs text-faint">
                   Average {fmtMs(reliability.avgMs)} over {reliability.timed} timed runs.
                 </p>
                 {reliability.slowestStages.length > 0 && (
                   <div className="mt-3">
-                    <p className="mb-1 text-xs font-medium text-slate-500">Slowest stages (mean)</p>
+                    <p className="mb-1 text-xs font-medium text-faint">Slowest stages (mean)</p>
                     <ul className="space-y-1 text-xs">
                       {reliability.slowestStages.slice(0, 6).map((s) => (
                         <li key={s.stage} className="flex justify-between tabular-nums">
-                          <span className="text-slate-600">{s.stage.replace(/_/g, ' ')}</span>
-                          <span className="text-slate-500">
+                          <span className="text-muted">{s.stage.replace(/_/g, ' ')}</span>
+                          <span className="text-faint">
                             {fmtMs(s.avgMs)} avg · {fmtMs(s.p95Ms)} p95 · {s.runs} runs
                           </span>
                         </li>
@@ -533,13 +533,13 @@ export default async function EvaluationPage({
                   </p>
                 )}
                 <div className="mt-3">
-                  <p className="mb-1 text-xs font-medium text-slate-500">Search attribution (sources)</p>
+                  <p className="mb-1 text-xs font-medium text-faint">Search attribution (sources)</p>
                   <Bars
                     data={Object.entries(providers.searchAttribution).sort((a, b) => b[1] - a[1])}
                     total={Object.values(providers.searchAttribution).reduce((a, b) => a + b, 0)}
                   />
                 </div>
-                <p className="mt-2 text-xs text-slate-500">
+                <p className="mt-2 text-xs text-faint">
                   Model errors:{' '}
                   {Object.keys(providers.modelErrors).length === 0
                     ? 'none recorded in this period'
@@ -551,24 +551,24 @@ export default async function EvaluationPage({
             {/* ── trends ─────────────────────────────────────────────────── */}
             <Panel title="Trends" note="This window versus the one immediately before it." tip={PANEL_DEFINITIONS['Trends']}>
               {!trendRows ? (
-                <p className="text-sm text-slate-500">
+                <p className="text-sm text-faint">
                   Not enough historical data — the preceding window contains no runs.
                 </p>
               ) : (
                 <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                   {trendRows.map((t) => (
-                    <li key={t.label} className="flex items-baseline justify-between rounded-lg bg-slate-50 px-3 py-2">
-                      <span className="text-sm text-slate-700">{t.label}</span>
+                    <li key={t.label} className="flex items-baseline justify-between rounded-lg bg-app px-3 py-2">
+                      <span className="text-sm text-ink/85">{t.label}</span>
                       <span className="text-sm tabular-nums font-medium">
                         {t.delta == null ? (
-                          <span className="text-slate-400">no comparison</span>
+                          <span className="text-faint">no comparison</span>
                         ) : (
                           <span
                             className={
                               t.delta === 0
-                                ? 'text-slate-500'
+                                ? 'text-faint'
                                 : (t.inverted ? t.delta < 0 : t.delta > 0)
-                                  ? 'text-emerald-600'
+                                  ? 'text-emerald-700'
                                   : 'text-red-600'
                             }
                           >
@@ -587,9 +587,9 @@ export default async function EvaluationPage({
           <Panel title="Not measured" note="Gaps are shown rather than hidden. No value here is estimated." tip={PANEL_DEFINITIONS['Not measured']}>
             <ul className="grid gap-2 sm:grid-cols-2">
               {gaps.map((g) => (
-                <li key={g.name} className="border-l-2 border-slate-200 pl-3" title={`${g.reason} Would require: ${g.requires}`}>
-                  <p className="text-sm font-medium text-slate-800">{g.name}</p>
-                  <p className="text-xs leading-snug text-slate-500">{g.reason}</p>
+                <li key={g.name} className="border-l-2 border-hairline pl-3" title={`${g.reason} Would require: ${g.requires}`}>
+                  <p className="text-sm font-medium text-ink/90">{g.name}</p>
+                  <p className="text-xs leading-snug text-faint">{g.reason}</p>
                 </li>
               ))}
             </ul>
@@ -619,12 +619,12 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+    <section className="rounded-xl border border-hairline bg-surface p-5">
       <h2 className="flex items-center gap-1.5 text-sm font-semibold">
         {title}
         {tip && <InfoTip label={title} definition={tip} />}
       </h2>
-      {note && <p className="mb-3 mt-0.5 text-xs leading-relaxed text-slate-500">{note}</p>}
+      {note && <p className="mb-3 mt-0.5 text-xs leading-relaxed text-faint">{note}</p>}
       {children}
     </section>
   );
@@ -647,18 +647,18 @@ function Overview({
 }) {
   return (
     <div className="min-w-0">
-      <dt className="flex items-center gap-1 text-xs font-medium text-slate-500">
+      <dt className="flex items-center gap-1 text-xs font-medium text-faint">
         <span className="min-w-0 truncate">{label}</span>
         {tip && <InfoTip label={label} definition={tip} />}
       </dt>
       <dd
         className={`mt-0.5 font-bold tabular-nums tracking-tight ${
-          emphasis ? 'text-3xl text-slate-900' : 'text-2xl text-slate-700'
+          emphasis ? 'text-3xl text-ink' : 'text-2xl text-ink/85'
         }`}
       >
         {value}
       </dd>
-      <dd className="text-xs leading-snug text-slate-400">{sub}</dd>
+      <dd className="text-xs leading-snug text-faint">{sub}</dd>
     </div>
   );
 }
@@ -673,23 +673,23 @@ function BottleneckPanel({ bottleneck }: { bottleneck: Bottleneck }) {
   const none = bottleneck.kind === 'none';
   return (
     <section
-      className={`rounded-xl border p-5 shadow-sm ${
-        none ? 'border-slate-200 bg-white' : 'border-amber-200 bg-amber-50'
+      className={`rounded-xl border p-5 ${
+        none ? 'border-hairline bg-surface' : 'border-amber-600/25 bg-amber-600/6'
       }`}
     >
       <h2
         className={`flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide ${
-          none ? 'text-slate-400' : 'text-amber-700'
+          none ? 'text-faint' : 'text-amber-700'
         }`}
       >
         Current bottleneck
         <InfoTip label="current bottleneck" definition={PANEL_DEFINITIONS['Current bottleneck']} />
       </h2>
-      <p className={`mt-1 text-base font-semibold ${none ? 'text-slate-700' : 'text-amber-950'}`}>
+      <p className={`mt-1 text-base font-semibold ${none ? 'text-ink/85' : 'text-amber-950'}`}>
         {bottleneck.headline}
       </p>
       {bottleneck.why && (
-        <p className={`mt-1 text-sm leading-relaxed ${none ? 'text-slate-600' : 'text-amber-900'}`}>
+        <p className={`mt-1 text-sm leading-relaxed ${none ? 'text-muted' : 'text-amber-900'}`}>
           <span className="font-medium">Why: </span>
           {bottleneck.why}
         </p>
@@ -705,8 +705,8 @@ function BottleneckPanel({ bottleneck }: { bottleneck: Bottleneck }) {
 
 function Mini({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="rounded-lg bg-slate-50 px-3 py-2">
-      <p className="text-xs text-slate-500">{label}</p>
+    <div className="rounded-lg bg-app px-3 py-2">
+      <p className="text-xs text-faint">{label}</p>
       <p className="text-lg font-semibold tabular-nums">{value}</p>
     </div>
   );
@@ -715,10 +715,10 @@ function Mini({ label, value }: { label: string; value: React.ReactNode }) {
 function RateLine({ label, r }: { label: string; r: Rate }) {
   return (
     <p className="mt-2 flex items-baseline justify-between text-sm" title={r.definition}>
-      <span className="text-slate-600">{label}</span>
+      <span className="text-muted">{label}</span>
       <span className="tabular-nums font-medium">
         {fmtRate(r)}{' '}
-        <span className="text-xs font-normal text-slate-400">
+        <span className="text-xs font-normal text-faint">
           ({r.numerator}/{r.denominator})
         </span>
       </span>
@@ -728,22 +728,22 @@ function RateLine({ label, r }: { label: string; r: Rate }) {
 
 function Bars({ data, total }: { data: [string, number][]; total: number }) {
   if (data.length === 0 || total === 0) {
-    return <p className="text-sm text-slate-400">No data in this period.</p>;
+    return <p className="text-sm text-faint">No data in this period.</p>;
   }
   return (
     <ul className="space-y-1">
       {data.map(([label, n]) => (
         <li key={label} className="flex items-center gap-2">
-          <span className="w-40 shrink-0 truncate text-xs text-slate-600">
+          <span className="w-40 shrink-0 truncate text-xs text-muted">
             {label.replace(/_/g, ' ')}
           </span>
-          <span className="h-4 flex-1 overflow-hidden rounded bg-slate-100">
+          <span className="h-4 flex-1 overflow-hidden rounded bg-ink/6">
             <span
-              className="block h-full bg-indigo-400/70"
+              className="block h-full bg-accent/70/70"
               style={{ width: `${total > 0 ? (n / total) * 100 : 0}%` }}
             />
           </span>
-          <span className="w-10 shrink-0 text-right text-xs tabular-nums text-slate-600">{n}</span>
+          <span className="w-10 shrink-0 text-right text-xs tabular-nums text-muted">{n}</span>
         </li>
       ))}
     </ul>

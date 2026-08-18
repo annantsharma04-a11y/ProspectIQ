@@ -44,7 +44,7 @@ export function Workspace({
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
       <div className="lg:col-span-3">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-faint">
           New prospect
         </h2>
         <ProspectForm />
@@ -78,9 +78,9 @@ export function Workspace({
 
 function EmptyPanel({ title, body }: { title: string; body: string }) {
   return (
-    <section className="rounded-xl border border-dashed border-slate-200 bg-white/50 p-5">
-      <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">{title}</h2>
-      <p className="mt-2 text-sm leading-relaxed text-slate-500">{body}</p>
+    <section className="rounded-xl border border-dashed border-hairline bg-surface/50 p-5">
+      <h2 className="text-sm font-semibold uppercase tracking-wide text-faint">{title}</h2>
+      <p className="mt-2 text-sm leading-relaxed text-muted">{body}</p>
     </section>
   );
 }

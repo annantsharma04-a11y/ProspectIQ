@@ -5,12 +5,12 @@ import { getAuthenticatedUser } from '@/lib/supabase/server';
 const STATUS_TONE: Record<string, string> = {
   ready_for_review: 'bg-emerald-500',
   needs_manual_review: 'bg-amber-500',
-  approved: 'bg-indigo-500',
-  rejected: 'bg-slate-400',
+  approved: 'bg-accent',
+  rejected: 'bg-faint',
   failed: 'bg-red-500',
   ai_analysis_pending: 'bg-amber-500',
-  running: 'bg-blue-500',
-  queued: 'bg-slate-300',
+  running: 'bg-accent',
+  queued: 'bg-faint',
 };
 
 /** Real recent runs only — never seeded, never sample data. */
@@ -28,10 +28,10 @@ export async function RecentRuns({ limit = 6 }: { limit?: number }) {
   if (runs.length === 0) {
     return (
       <div className="mt-6">
-        <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+        <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-faint">
           Recent runs
         </h2>
-        <p className="rounded-lg border border-dashed border-slate-200 px-3 py-4 text-xs leading-relaxed text-slate-500">
+        <p className="rounded-lg border border-dashed border-hairline px-3 py-4 text-xs leading-relaxed text-muted">
           No runs yet. Analyze a prospect and the 14 pipeline stages will report here as they
           execute.
         </p>
@@ -42,10 +42,10 @@ export async function RecentRuns({ limit = 6 }: { limit?: number }) {
   return (
     <div className="mt-6">
       <div className="mb-2 flex items-baseline justify-between">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-faint">
           Recent runs
         </h2>
-        <Link href="/history" className="text-xs font-medium text-indigo-600 hover:underline">
+        <Link href="/history" className="text-xs font-medium text-accent hover:underline">
           All
         </Link>
       </div>
@@ -54,22 +54,22 @@ export async function RecentRuns({ limit = 6 }: { limit?: number }) {
           <li key={run.id}>
             <Link
               href={`/runs/${run.id}`}
-              className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-slate-100"
+              className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-ink/5"
             >
               <span
-                className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_TONE[run.status] ?? 'bg-slate-300'}`}
+                className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_TONE[run.status] ?? 'bg-faint'}`}
                 aria-hidden="true"
               />
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm text-slate-800">
+                <span className="block truncate text-sm text-ink">
                   {run.prospect_name ?? run.input_name ?? `/in/${run.linkedin_slug}`}
                 </span>
-                <span className="block truncate text-xs text-slate-500">
+                <span className="block truncate text-xs text-faint">
                   {run.company_name ?? run.status.replace(/_/g, ' ')}
                 </span>
               </span>
               {run.overall_confidence !== null && (
-                <span className="shrink-0 text-xs tabular-nums text-slate-400">
+                <span className="shrink-0 text-xs tabular-nums text-faint">
                   {run.overall_confidence}
                 </span>
               )}

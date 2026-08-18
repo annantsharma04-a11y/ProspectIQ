@@ -6,9 +6,11 @@ import Link from 'next/link';
 import { DraftReviewCard } from './DraftReviewCard';
 import { IdentityCard } from './IdentityCard';
 import { ContactCandidates } from './ContactCandidates';
+import { StatusBadge, type StatusTone } from './StatusBadge';
 import type { RunSnapshot } from '@/lib/types';
 import { deriveOutreachStatus, OUTREACH_LABEL } from '@/lib/qualification/outreach-status';
 import type { QualificationAction } from '@/lib/qualification/types';
+import { RUN_STATUS_TONE } from '@/lib/ui/status-styles';
 
 interface HookStageOutput {
   selected: {
@@ -52,13 +54,13 @@ function PipelineStatusLines({ snapshot }: { snapshot: RunSnapshot }) {
   if (run.status === 'queued' || run.status === 'running') return null;
 
   const line = (ok: boolean | null, text: string) => (
-    <li className={ok === null ? 'text-slate-400' : ok ? 'text-green-700' : 'text-amber-700'}>
+    <li className={ok === null ? 'text-faint' : ok ? 'text-emerald-700' : 'text-amber-700'}>
       <span aria-hidden="true">{ok === null ? '·' : ok ? '✓' : '⚠'}</span> {text}
     </li>
   );
 
   return (
-    <ul className="mt-3 space-y-0.5 rounded-lg bg-slate-50 px-3 py-2 text-xs">
+    <ul className="mt-3 space-y-0.5 rounded-lg bg-app px-3 py-2 text-xs">
       {run.profile_access?.directLinkedIn
         ? line(true, 'LinkedIn profile retrieved')
         : line(false, 'LinkedIn profile data unavailable — public web research used instead')}
@@ -92,20 +94,20 @@ function ProfileSourceCard({ run }: { run: RunSnapshot['run'] }) {
 
   if (access.directLinkedIn) {
     return (
-      <div className="mt-3 rounded-lg border border-green-200 bg-green-50 px-3 py-2">
-        <p className="text-xs font-semibold uppercase tracking-wide text-green-900">
+      <div className="mt-3 rounded-lg border border-emerald-600/20 bg-emerald-600/5 px-3 py-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-emerald-800">
           LinkedIn profile
         </p>
-        <p className="mt-0.5 text-sm text-green-800">
+        <p className="mt-0.5 text-sm text-emerald-800">
           <span aria-hidden="true">✓</span> Profile data retrieved
           {access.profileCompleteness === 'partial' && ' (partial)'}
         </p>
-        <p className="text-xs text-green-700">
+        <p className="text-xs text-emerald-700">
           Source: {PROVIDER_LABEL[access.primarySource] ?? access.primarySource}
         </p>
 
         {profile && (
-          <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-green-800/80">
+          <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-emerald-800/80">
             {profile.headline && <span className="truncate">{profile.headline}</span>}
             {profile.experience.length > 0 && <span>{profile.experience.length} roles</span>}
             {profile.education.length > 0 && <span>{profile.education.length} education</span>}
@@ -115,14 +117,14 @@ function ProfileSourceCard({ run }: { run: RunSnapshot['run'] }) {
             )}
           </div>
         )}
-        {access.reason && <p className="mt-1 text-[11px] text-green-700">{access.reason}</p>}
+        {access.reason && <p className="mt-1 text-[11px] text-emerald-700">{access.reason}</p>}
       </div>
     );
   }
 
   return (
-    <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
-      <p className="text-xs font-semibold uppercase tracking-wide text-amber-900">
+    <div className="mt-3 rounded-lg border border-amber-600/20 bg-amber-600/5 px-3 py-2">
+      <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">
         LinkedIn profile
       </p>
       <p className="mt-0.5 text-sm text-amber-800">
@@ -135,22 +137,29 @@ function ProfileSourceCard({ run }: { run: RunSnapshot['run'] }) {
 }
 
 const FIT_TONE: Record<string, string> = {
-  HIGH: 'bg-emerald-100 text-emerald-800',
-  MEDIUM: 'bg-sky-100 text-sky-800',
-  LOW: 'bg-amber-100 text-amber-800',
-  UNKNOWN: 'bg-slate-100 text-slate-600',
+  HIGH: 'bg-emerald-600/10 text-emerald-800',
+  MEDIUM: 'bg-accent/10 text-accent',
+  LOW: 'bg-amber-600/10 text-amber-800',
+  UNKNOWN: 'bg-ink/6 text-muted',
 };
 
 const BASIS_TONE: Record<string, string> = {
-  OBSERVED: 'bg-emerald-100 text-emerald-800',
-  INFERRED: 'bg-amber-100 text-amber-800',
-  UNKNOWN: 'bg-slate-100 text-slate-500',
+  OBSERVED: 'bg-emerald-600/10 text-emerald-800',
+  INFERRED: 'bg-amber-600/10 text-amber-800',
+  UNKNOWN: 'bg-ink/6 text-faint',
 };
 
-const QUAL_TONE: Record<string, string> = {
-  QUALIFIED: 'border-emerald-300 bg-emerald-50 text-emerald-900',
-  BORDERLINE: 'border-amber-300 bg-amber-50 text-amber-900',
-  NOT_QUALIFIED: 'border-slate-300 bg-slate-50 text-slate-800',
+const QUAL_TONE: Record<string, StatusTone> = {
+  QUALIFIED: 'emerald',
+  BORDERLINE: 'amber',
+  NOT_QUALIFIED: 'neutral',
+};
+
+/** Full-block treatment for the headline decision callout — same tones, heavier context. */
+const QUAL_BLOCK_TONE: Record<string, string> = {
+  QUALIFIED: 'border-emerald-600/25 bg-emerald-600/6 text-emerald-900',
+  BORDERLINE: 'border-amber-600/25 bg-amber-600/6 text-amber-900',
+  NOT_QUALIFIED: 'border-hairline bg-app text-ink',
 };
 
 /**
@@ -196,17 +205,17 @@ function QualificationCard({ snapshot }: { snapshot: RunSnapshot }) {
   );
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
+    <div className="rounded-xl border border-hairline bg-surface p-5">
+      <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-faint">
         Target qualification
       </h3>
 
-      <div className={`rounded-lg border p-3 ${QUAL_TONE[q.classification] ?? QUAL_TONE.BORDERLINE}`}>
+      <div className={`rounded-lg border p-3 ${QUAL_BLOCK_TONE[q.classification] ?? QUAL_BLOCK_TONE.BORDERLINE}`}>
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <span className="flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider">
             {q.classification.replace(/_/g, ' ')}
             {isExploratory(q.action) ? (
-              <span className="rounded-full bg-white/60 px-1.5 py-0.5 text-[10px] font-medium normal-case tracking-normal text-amber-900">
+              <span className="rounded-full bg-surface/70 px-1.5 py-0.5 text-[10px] font-medium normal-case tracking-normal text-amber-900">
                 exploratory outreach
               </span>
             ) : null}
@@ -218,26 +227,26 @@ function QualificationCard({ snapshot }: { snapshot: RunSnapshot }) {
       </div>
 
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        <div className="rounded-lg border border-slate-200 p-3">
+        <div className="rounded-lg border border-hairline p-3">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <span className="text-xs font-semibold uppercase tracking-wider text-faint">
               Prospect fit
             </span>
             <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${FIT_TONE[p.classification]}`}>
               {p.classification} {p.score}
             </span>
           </div>
-          <p className="mt-1.5 text-xs text-slate-700">{p.relevance_reason}</p>
-          <dl className="mt-1.5 space-y-0.5 text-[11px] text-slate-500">
+          <p className="mt-1.5 text-xs text-ink/85">{p.relevance_reason}</p>
+          <dl className="mt-1.5 space-y-0.5 text-[11px] text-faint">
             {p.role ? <div>Role: {p.role}</div> : null}
             {p.seniority ? <div>Seniority: {p.seniority}</div> : null}
             <div>Decision authority: {p.decision_authority}</div>
           </dl>
         </div>
 
-        <div className="rounded-lg border border-slate-200 p-3">
+        <div className="rounded-lg border border-hairline p-3">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <span className="text-xs font-semibold uppercase tracking-wider text-faint">
               Company fit
             </span>
             <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${FIT_TONE[c.classification]}`}>
@@ -245,14 +254,14 @@ function QualificationCard({ snapshot }: { snapshot: RunSnapshot }) {
             </span>
           </div>
           {c.fit_reasons[0] ? (
-            <p className="mt-1.5 text-xs text-slate-700">
+            <p className="mt-1.5 text-xs text-ink/85">
               {c.fit_reasons[0].reason}
-              <span className="ml-1 text-[10px] uppercase tracking-wide text-slate-400">
+              <span className="ml-1 text-[10px] uppercase tracking-wide text-faint">
                 {c.fit_reasons[0].basis}
               </span>
             </p>
           ) : null}
-          <dl className="mt-1.5 space-y-0.5 text-[11px] text-slate-500">
+          <dl className="mt-1.5 space-y-0.5 text-[11px] text-faint">
             {c.industry ? <div>Industry: {c.industry}</div> : null}
             {c.relevant_workflows.length > 0 ? (
               <div>Workflows: {c.relevant_workflows.slice(0, 3).join(', ')}</div>
@@ -273,15 +282,15 @@ function QualificationCard({ snapshot }: { snapshot: RunSnapshot }) {
                     >
                       OBSERVED
                     </span>
-                    <span className="min-w-0 flex-1 text-slate-700">
+                    <span className="min-w-0 flex-1 text-ink/85">
                       {m.capability_name}
-                      <span className="text-slate-400"> · {m.fit_strength}/100</span>
+                      <span className="text-faint"> · {m.fit_strength}/100</span>
                       {m.evidence.length > 0 ? (
                         <a
                           href={m.evidence[0].url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="ml-1 text-indigo-600 hover:underline"
+                          className="ml-1 text-accent hover:underline"
                         >
                           ↗
                         </a>
@@ -290,20 +299,20 @@ function QualificationCard({ snapshot }: { snapshot: RunSnapshot }) {
                   </li>
                 ))}
               </ul>
-              <p className="mt-1 text-[10px] text-slate-500">
+              <p className="mt-1 text-[10px] text-faint">
                 Qualification basis: {observedCaps.length} observed use case
                 {observedCaps.length === 1 ? '' : 's'}.
               </p>
             </div>
           ) : (
-            <p className="mt-2 text-[11px] text-slate-500">
+            <p className="mt-2 text-[11px] text-faint">
               No observed use case — nothing evidenced qualified this company.
             </p>
           )}
 
           {otherCaps.length > 0 ? (
-            <div className="mt-2 border-t border-slate-100 pt-2">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+            <div className="mt-2 border-t border-hairline pt-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-faint">
                 Additional inferred / unknown capabilities
               </p>
               <ul className="mt-1 space-y-1">
@@ -315,14 +324,14 @@ function QualificationCard({ snapshot }: { snapshot: RunSnapshot }) {
                     >
                       {m.basis}
                     </span>
-                    <span className="min-w-0 flex-1 text-slate-500">
+                    <span className="min-w-0 flex-1 text-muted">
                       {m.capability_name}
-                      <span className="text-slate-400"> · {m.fit_strength}/100</span>
+                      <span className="text-faint"> · {m.fit_strength}/100</span>
                     </span>
                   </li>
                 ))}
               </ul>
-              <p className="mt-1 text-[10px] italic text-slate-500">
+              <p className="mt-1 text-[10px] italic text-faint">
                 Potential fit — inferred from available context. These did not contribute to
                 qualification and are not used as outreach angles.
               </p>
@@ -330,15 +339,15 @@ function QualificationCard({ snapshot }: { snapshot: RunSnapshot }) {
           ) : null}
 
           {c.evidence_adjustment ? (
-            <p className="mt-1.5 rounded bg-amber-50 px-1.5 py-1 text-[10px] leading-relaxed text-amber-800">
+            <p className="mt-1.5 rounded bg-amber-600/8 px-1.5 py-1 text-[10px] leading-relaxed text-amber-800">
               {c.evidence_adjustment}
             </p>
           ) : null}
         </div>
       </div>
 
-      <p className="mt-3 border-t border-slate-100 pt-2 text-xs text-slate-600">
-        <span className="font-medium text-slate-700">Decision: </span>
+      <p className="mt-3 border-t border-hairline pt-2 text-xs text-muted">
+        <span className="font-medium text-ink">Decision: </span>
         {ACTION_LABEL[q.action]}
       </p>
     </div>
@@ -368,13 +377,13 @@ export function ResultPanel({
   return (
     <section className="space-y-4">
       {/* Prospect summary */}
-      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="rounded-xl border border-hairline bg-surface p-5">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h2 className="text-lg font-bold tracking-tight text-slate-900">
+            <h2 className="font-display text-lg font-semibold tracking-tight text-ink">
               {run.prospect_name ?? run.input_name ?? 'Identifying…'}
             </h2>
-            <p className="text-sm text-slate-600">
+            <p className="text-sm text-muted">
               {[run.prospect_title ?? run.input_title, run.company_name ?? run.input_company]
                 .filter(Boolean)
                 .join(' · ') || 'Company not yet resolved'}
@@ -383,50 +392,34 @@ export function ResultPanel({
               href={run.linkedin_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-1 inline-block max-w-full break-all text-xs text-indigo-600 hover:underline"
+              className="mt-1 inline-block max-w-full break-all text-xs text-accent hover:underline"
             >
               {run.linkedin_url} ↗
             </a>
           </div>
-          <div className="text-right">
-            {run.qualification_status ? (
-              <span
-                className={`mr-1 rounded-full px-2 py-1 text-xs font-medium ${
-                  run.qualification_status === 'QUALIFIED'
-                    ? 'bg-emerald-100 text-emerald-700'
-                    : run.qualification_status === 'BORDERLINE'
-                      ? 'bg-amber-100 text-amber-700'
-                      : 'bg-slate-200 text-slate-600'
-                }`}
-                title="Target qualification — should we contact this person about this product?"
-              >
-                {run.qualification_status.replace(/_/g, ' ')}
+          <div className="flex flex-col items-end gap-1 text-right">
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              {run.qualification_status ? (
+                <span title="Target qualification — should we contact this person about this product?">
+                  <StatusBadge tone={QUAL_TONE[run.qualification_status] ?? 'neutral'}>
+                    {run.qualification_status.replace(/_/g, ' ')}
+                  </StatusBadge>
+                </span>
+              ) : null}
+              <span title="Outreach status — what has happened to the message itself.">
+                <StatusBadge tone={RUN_STATUS_TONE[run.status] ?? 'neutral'}>
+                  {OUTREACH_LABEL[deriveOutreachStatus(run, stages, draft)]}
+                </StatusBadge>
               </span>
-            ) : null}
-            <span
-              title="Outreach status — what has happened to the message itself."
-              className={`rounded-full px-2.5 py-1 text-xs font-medium ${
-                run.status === 'ready_for_review'
-                  ? 'bg-green-100 text-green-700'
-                  : run.status === 'needs_manual_review'
-                    ? 'bg-amber-100 text-amber-700'
-                    : run.status === 'failed'
-                      ? 'bg-red-100 text-red-700'
-                      : run.status === 'approved'
-                        ? 'bg-indigo-100 text-indigo-700'
-                        : 'bg-slate-100 text-slate-600'
-              }`}
-            >
-              {OUTREACH_LABEL[deriveOutreachStatus(run, stages, draft)]}
-            </span>
+            </div>
             {run.overall_confidence !== null && (
-              <p className="mt-1 text-xs text-slate-500">
+              <p className="text-xs text-faint">
                 confidence {run.overall_confidence}/100
               </p>
             )}
             {run.identity_confidence !== null && (
               <p
-                className={`text-xs ${run.identity_confidence < 50 ? 'text-amber-600' : 'text-slate-400'}`}
+                className={`text-xs ${run.identity_confidence < 50 ? 'text-amber-700' : 'text-faint'}`}
                 title="How confident we are that this is the right person, based on the evidence retrieved."
               >
                 identity {run.identity_confidence}/100
@@ -440,7 +433,7 @@ export function ResultPanel({
         <PipelineStatusLines snapshot={snapshot} />
 
         {identityOut?.identity?.employer_change_note && (
-          <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <p className="mt-2 rounded-lg border border-amber-600/20 bg-amber-600/6 px-3 py-2 text-xs text-amber-800">
             <span className="font-medium">Employer change:</span>{' '}
             {identityOut.identity.employer_change_note}
           </p>
@@ -448,10 +441,10 @@ export function ResultPanel({
 
         {(identityOut?.identity?.alternates?.length ?? 0) > 0 && (
           <details className="mt-2 text-xs">
-            <summary className="cursor-pointer text-slate-500">
+            <summary className="cursor-pointer text-muted">
               Other people who could match this profile ({identityOut!.identity!.alternates!.length})
             </summary>
-            <ul className="mt-1 list-inside list-disc text-slate-600">
+            <ul className="mt-1 list-inside list-disc text-muted">
               {identityOut!.identity!.alternates!.map((a, i) => (
                 <li key={i}>
                   {[a.name, a.company].filter(Boolean).join(' — ')}: {a.why}
@@ -463,8 +456,8 @@ export function ResultPanel({
 
         {identityOut?.identity?.reasoning && (
           <details className="mt-1.5 text-xs">
-            <summary className="cursor-pointer text-slate-500">How this identity was determined</summary>
-            <p className="mt-1 text-slate-600">{identityOut.identity.reasoning}</p>
+            <summary className="cursor-pointer text-muted">How this identity was determined</summary>
+            <p className="mt-1 text-muted">{identityOut.identity.reasoning}</p>
           </details>
         )}
       </div>
@@ -489,47 +482,47 @@ export function ResultPanel({
 
       {/* Selected hook */}
       {hookOut && (
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
+        <div className="rounded-xl border border-hairline bg-surface p-5">
+          <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-faint">
             Selected hook
           </h3>
 
           {hookOut.selected ? (
             <>
-              <p className="text-sm font-medium text-slate-800">{hookOut.selected.signal}</p>
-              <p className="mt-1 text-xs text-slate-600">{hookOut.selected.why_it_matters}</p>
+              <p className="text-sm font-medium text-ink">{hookOut.selected.signal}</p>
+              <p className="mt-1 text-xs text-muted">{hookOut.selected.why_it_matters}</p>
               {hookOut.selected.role_relevance ? (
-                <p className="mt-1 text-xs text-slate-600">
-                  <span className="font-medium text-slate-500">Why this prospect: </span>
+                <p className="mt-1 text-xs text-muted">
+                  <span className="font-medium text-faint">Why this prospect: </span>
                   {hookOut.selected.role_relevance}
                 </p>
               ) : null}
               {hookOut.selected.outreach_rationale ? (
-                <p className="mt-1 text-xs text-slate-600">
-                  <span className="font-medium text-slate-500">Why now: </span>
+                <p className="mt-1 text-xs text-muted">
+                  <span className="font-medium text-faint">Why now: </span>
                   {hookOut.selected.outreach_rationale}
                 </p>
               ) : null}
-              <div className="mt-2 flex flex-wrap items-center gap-x-3 text-[11px] text-slate-400">
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 text-[11px] text-faint">
                 <span>{hookOut.selected.published_date ?? 'undated'}</span>
                 <a
                   href={hookOut.selected.source_url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-indigo-600 hover:underline"
+                  className="text-accent hover:underline"
                 >
                   evidence ↗
                 </a>
                 {hookOut.confidence !== undefined && <span>selection confidence {hookOut.confidence}/100</span>}
               </div>
               {hookSignal?.supporting_quote && (
-                <blockquote className="mt-2 border-l-2 border-indigo-200 pl-2 text-xs italic text-slate-500">
+                <blockquote className="mt-2 border-l-2 border-accent/25 pl-2 text-xs italic text-muted">
                   “{hookSignal.supporting_quote}”
                 </blockquote>
               )}
             </>
           ) : (
-            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3">
+            <div className="rounded-lg border border-amber-600/25 bg-amber-600/6 p-3">
               <p className="text-sm font-semibold uppercase tracking-wide text-amber-900">
                 No verified outreach hook found
               </p>
@@ -573,20 +566,20 @@ export function ResultPanel({
 
           {hookOut.selection_reason && hookOut.selected && (
             <details className="mt-2 text-xs">
-              <summary className="cursor-pointer text-slate-500">Why this hook was chosen</summary>
-              <p className="mt-1 text-slate-600">{hookOut.selection_reason}</p>
+              <summary className="cursor-pointer text-muted">Why this hook was chosen</summary>
+              <p className="mt-1 text-muted">{hookOut.selection_reason}</p>
             </details>
           )}
 
           {(hookOut.alternatives_considered?.length ?? 0) > 0 && (
             <details className="mt-1.5 text-xs">
-              <summary className="cursor-pointer text-slate-500">
+              <summary className="cursor-pointer text-muted">
                 Alternatives considered ({hookOut.alternatives_considered!.length})
               </summary>
-              <ul className="mt-1 space-y-1 text-slate-600">
+              <ul className="mt-1 space-y-1 text-muted">
                 {hookOut.alternatives_considered!.map((a, i) => (
                   <li key={i}>
-                    <span className="text-slate-700">{a.signal}</span> — {a.why_not}
+                    <span className="text-ink/85">{a.signal}</span> — {a.why_not}
                   </li>
                 ))}
               </ul>
@@ -605,7 +598,7 @@ export function ResultPanel({
         // leaving the old draft's state visible under the new draft's data.
         <DraftReviewCard key={draft.id} runId={run.id} run={run} draft={draft} onReviewed={onChange} />
       ) : inProgress ? (
-        <p className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-500">
+        <p className="rounded-xl border border-dashed border-hairline p-4 text-sm text-muted">
           No draft yet — the pipeline is still running.
         </p>
       ) : null}
@@ -613,7 +606,7 @@ export function ResultPanel({
       {/* Evidence */}
       {signals.length > 0 && (
         <div>
-          <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
+          <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-faint">
             Evidence ({signals.length} signals)
           </h3>
           <SignalList signals={signals} />
@@ -621,8 +614,8 @@ export function ResultPanel({
       )}
 
       {sources.length > 0 && (
-        <details className="rounded-xl border border-slate-200 bg-white p-4">
-          <summary className="cursor-pointer text-sm font-semibold text-slate-700">
+        <details className="rounded-xl border border-hairline bg-surface p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-ink">
             Sources ({sources.length})
           </summary>
           <div className="mt-3">

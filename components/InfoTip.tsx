@@ -174,7 +174,7 @@ export default function InfoTip({
         onMouseLeave={close}
         onFocus={show}
         onBlur={close}
-        className="inline-flex h-4 w-4 shrink-0 cursor-help items-center justify-center rounded-full border border-slate-300 align-middle text-[10px] font-medium normal-case leading-none tracking-normal text-slate-400 transition-colors hover:border-indigo-400 hover:text-indigo-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+        className="inline-flex h-4 w-4 shrink-0 cursor-help items-center justify-center rounded-full border border-hairline align-middle text-[10px] font-medium normal-case leading-none tracking-normal text-faint transition-colors hover:border-accent/50 hover:text-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       >
         i
         {/* Always available to assistive technology, open or not. */}

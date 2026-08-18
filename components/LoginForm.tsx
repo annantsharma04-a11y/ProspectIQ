@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createBrowserSupabase } from '@/lib/supabase/client';
 
 const FIELD =
-  'mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500';
+  'mt-1 w-full rounded-lg border border-hairline bg-surface px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent';
 
 /**
  * Email + password sign-in against Supabase Auth.
@@ -53,9 +53,9 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
   }
 
   return (
-    <form onSubmit={submit} className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+    <form onSubmit={submit} className="space-y-4 rounded-xl border border-hairline bg-surface p-5">
       <div>
-        <label htmlFor="email" className="block text-sm font-medium text-slate-700">Email</label>
+        <label htmlFor="email" className="block text-sm font-medium text-ink">Email</label>
         <input
           id="email"
           type="email"
@@ -67,7 +67,7 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
         />
       </div>
       <div>
-        <label htmlFor="password" className="block text-sm font-medium text-slate-700">Password</label>
+        <label htmlFor="password" className="block text-sm font-medium text-ink">Password</label>
         <input
           id="password"
           type="password"
@@ -80,13 +80,13 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
         />
       </div>
 
-      {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{error}</p>}
-      {notice && <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{notice}</p>}
+      {error && <p className="rounded-lg bg-red-600/8 px-3 py-2 text-sm text-red-700" role="alert">{error}</p>}
+      {notice && <p className="rounded-lg bg-emerald-600/8 px-3 py-2 text-sm text-emerald-800">{notice}</p>}
 
       <button
         type="submit"
         disabled={busy}
-        className="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+        className="w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-accent-hover disabled:opacity-50"
       >
         {busy ? 'Working…' : mode === 'signin' ? 'Sign in' : 'Create account'}
       </button>
@@ -94,7 +94,7 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
       <button
         type="button"
         onClick={() => { setMode(mode === 'signin' ? 'signup' : 'signin'); setError(null); setNotice(null); }}
-        className="w-full text-xs text-slate-500 hover:text-indigo-600"
+        className="w-full text-xs text-faint hover:text-accent"
       >
         {mode === 'signin' ? 'Need an account? Create one' : 'Already have an account? Sign in'}
       </button>

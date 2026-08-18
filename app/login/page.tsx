@@ -15,10 +15,10 @@ export default async function LoginPage({
 
   return (
     <div className="mx-auto max-w-sm py-16">
-      <h1 className="text-2xl font-bold tracking-tight">
-        Prospect<span className="text-indigo-600">IQ</span>
+      <h1 className="font-display text-2xl font-semibold tracking-tight text-ink">
+        Prospect<span className="text-accent">IQ</span>
       </h1>
-      <p className="mt-1 text-sm text-slate-600">
+      <p className="mt-1 text-sm text-muted">
         Sign in to run prospect research. Runs are private to your account.
       </p>
       <div className="mt-6">

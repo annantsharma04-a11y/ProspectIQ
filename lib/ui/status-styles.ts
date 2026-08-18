@@ -2,24 +2,29 @@
 //
 // Extracted from the history page unchanged so the prospect pages label a run
 // exactly the way the run list always has — one vocabulary, one place to change.
+//
+// Exposed as StatusTone keys (see components/StatusBadge.tsx) rather than raw
+// class strings, so every status pill in the app renders through the same
+// dot + translucent-label primitive instead of each page inventing its own.
 
 import type { RunRow } from '@/lib/types';
+import type { StatusTone } from '@/components/StatusBadge';
 
-export const RUN_STATUS_STYLE: Record<string, string> = {
-  ready_for_review: 'bg-green-100 text-green-700',
-  needs_manual_review: 'bg-amber-100 text-amber-700',
-  approved: 'bg-indigo-100 text-indigo-700',
-  rejected: 'bg-slate-200 text-slate-600',
-  failed: 'bg-red-100 text-red-700',
-  running: 'bg-blue-100 text-blue-700',
-  ai_analysis_pending: 'bg-amber-100 text-amber-700',
-  queued: 'bg-slate-100 text-slate-500',
+export const RUN_STATUS_TONE: Record<string, StatusTone> = {
+  ready_for_review: 'emerald',
+  needs_manual_review: 'amber',
+  approved: 'accent',
+  rejected: 'neutral',
+  failed: 'red',
+  running: 'accent',
+  ai_analysis_pending: 'amber',
+  queued: 'neutral',
 };
 
-export const QUAL_STYLE: Record<string, string> = {
-  QUALIFIED: 'bg-emerald-100 text-emerald-700',
-  BORDERLINE: 'bg-amber-100 text-amber-700',
-  NOT_QUALIFIED: 'bg-slate-200 text-slate-600',
+export const QUAL_TONE: Record<string, StatusTone> = {
+  QUALIFIED: 'emerald',
+  BORDERLINE: 'amber',
+  NOT_QUALIFIED: 'neutral',
 };
 
 /**

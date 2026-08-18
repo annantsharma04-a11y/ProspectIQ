@@ -1,6 +1,45 @@
 @import "tailwindcss";
 
-:root {
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
-    sans-serif;
+/*
+ * ProspectIQ design tokens — approved visual system.
+ *
+ * A small, deliberately restrained palette for a professional B2B
+ * intelligence/research tool: warm off-white surfaces, one ink color for
+ * primary text, two muted tones for secondary/tertiary text, one accent, and
+ * a single hairline color for dividers. Status color (success/warning/danger)
+ * stays on Tailwind's built-in emerald/amber/red scale, used at low-opacity
+ * tints rather than solid fills, so it reads as restrained rather than
+ * decorative.
+ *
+ * Every `--color-*` / `--font-*` key here is picked up by Tailwind v4
+ * automatically (bg-app, text-ink, border-hairline, font-serif, …) — no
+ * tailwind.config.js needed.
+ */
+@theme {
+  --color-app: #f7f6f3;
+  --color-surface: #fdfcfa;
+  --color-ink: #1c2127;
+  --color-muted: #5b6472;
+  --color-faint: #8b93a0;
+  --color-accent: #33546f;
+  --color-accent-hover: #26404f;
+  --color-hairline: #e7e3da;
+
+  --font-sans: var(--font-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-serif: var(--font-serif), ui-serif, Georgia, "Times New Roman", serif;
+}
+
+@layer base {
+  body {
+    background-color: var(--color-app);
+    color: var(--color-ink);
+  }
+}
+
+/* Serif display type for page titles / wordmark — never applied to the small
+   uppercase section labels, which stay in the sans UI face. Tailwind v4's
+   `@utility` at-rule (not the old v3 `@layer utilities { .foo {} }` pattern)
+   is what actually registers a custom utility class. */
+@utility font-display {
+  font-family: var(--font-serif), ui-serif, Georgia, "Times New Roman", serif;
 }

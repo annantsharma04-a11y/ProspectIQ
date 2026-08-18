@@ -38,11 +38,11 @@ export default function ResearchAgainButton({ prospectId }: { prospectId: string
         type="button"
         onClick={start}
         disabled={busy}
-        className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+        className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
       >
         {busy ? 'Starting…' : 'Research again'}
       </button>
-      <p className="mt-1 text-xs text-slate-400">Adds a new run; earlier runs stay untouched.</p>
+      <p className="mt-1 text-xs text-faint">Adds a new run; earlier runs stay untouched.</p>
       {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
     </div>
   );

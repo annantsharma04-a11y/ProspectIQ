@@ -13,9 +13,9 @@ import {
 } from '@/lib/research/top-sources';
 
 const EVIDENCE_STYLE: Record<string, string> = {
-  full: 'bg-emerald-50 text-emerald-700',
-  snippet: 'bg-amber-50 text-amber-700',
-  unavailable: 'bg-slate-100 text-slate-500',
+  full: 'bg-emerald-600/10 text-emerald-700',
+  snippet: 'bg-amber-600/10 text-amber-800',
+  unavailable: 'bg-ink/6 text-faint',
 };
 
 const SHOWN = 4;
@@ -50,7 +50,7 @@ export function TopSources({
 
   if (ranked.length === 0) {
     return (
-      <p className="rounded-lg border border-dashed border-slate-200 p-4 text-sm text-slate-500">
+      <p className="rounded-lg border border-dashed border-hairline p-4 text-sm text-muted">
         No sources retrieved.
       </p>
     );
@@ -58,7 +58,7 @@ export function TopSources({
 
   return (
     <div>
-      <p className="mb-2 text-xs text-slate-500">
+      <p className="mb-2 text-xs text-faint">
         {stage === 'research_prospect'
           ? 'Sources about the person: their role, public activity, interviews and posts.'
           : stage === 'research_company'
@@ -76,7 +76,7 @@ export function TopSources({
         <button
           type="button"
           onClick={() => setExpanded(true)}
-          className="mt-2.5 text-xs font-medium text-indigo-600 hover:underline"
+          className="mt-2.5 text-xs font-medium text-accent hover:underline"
         >
           View all {ranked.length} sources
         </button>
@@ -85,7 +85,7 @@ export function TopSources({
         <button
           type="button"
           onClick={() => setExpanded(false)}
-          className="mt-2.5 text-xs font-medium text-slate-500 hover:underline"
+          className="mt-2.5 text-xs font-medium text-muted hover:underline"
         >
           Show fewer
         </button>
@@ -101,24 +101,24 @@ function SourceCard({ ranked }: { ranked: RankedSource }) {
   const title = source.title?.trim();
 
   return (
-    <li className="rounded-lg border border-slate-200 bg-white px-3 py-2.5">
+    <li className="rounded-lg border border-hairline bg-surface px-3 py-2.5">
       <div className="flex items-start justify-between gap-3">
         <a
           href={source.url}
           target="_blank"
           rel="noopener noreferrer nofollow"
-          className="min-w-0 text-sm font-medium leading-snug text-indigo-700 hover:underline"
+          className="min-w-0 text-sm font-medium leading-snug text-accent hover:underline"
         >
           {title || 'Open source'}
         </a>
         {usedAsEvidence && (
-          <span className="shrink-0 rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
+          <span className="shrink-0 rounded-full bg-accent/8 px-2 py-0.5 text-[11px] font-medium text-accent">
             Used as evidence
           </span>
         )}
       </div>
 
-      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
+      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-faint">
         {domain && <span className="truncate">{domain}</span>}
         {date && (
           <>
@@ -134,7 +134,7 @@ function SourceCard({ ranked }: { ranked: RankedSource }) {
           href={source.url}
           target="_blank"
           rel="noopener noreferrer nofollow"
-          className="ml-auto shrink-0 font-medium text-slate-500 hover:text-indigo-600 hover:underline"
+          className="ml-auto shrink-0 font-medium text-muted hover:text-accent hover:underline"
         >
           Open ↗
         </a>

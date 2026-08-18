@@ -4,14 +4,15 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { ContactCandidateRow } from '@/lib/contacts/types';
 import { NO_LINKEDIN_MESSAGE, canSelectCandidate, interpretSelectResponse } from '@/lib/contacts/select-ui';
+import { StatusBadge, type StatusTone } from './StatusBadge';
 
-const STATUS_STYLE: Record<string, string> = {
-  DISCOVERED: 'bg-slate-100 text-slate-600',
-  PARTIAL: 'bg-amber-100 text-amber-700',
-  VERIFIED: 'bg-emerald-100 text-emerald-700',
-  AMBIGUOUS: 'bg-amber-100 text-amber-700',
-  FAILED: 'bg-red-100 text-red-700',
-  REJECTED: 'bg-slate-200 text-slate-500',
+const STATUS_TONE: Record<string, StatusTone> = {
+  DISCOVERED: 'neutral',
+  PARTIAL: 'amber',
+  VERIFIED: 'emerald',
+  AMBIGUOUS: 'amber',
+  FAILED: 'red',
+  REJECTED: 'neutral',
 };
 
 interface Outcome {
@@ -50,15 +51,15 @@ export function ContactCandidates({
 
   if (candidates.length === 0) {
     return (
-      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <p className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+      <div className="rounded-xl border border-hairline bg-surface p-5">
+        <p className="text-sm font-semibold uppercase tracking-wide text-faint">
           Account qualified &middot; Contact not qualified
         </p>
-        <p className="mt-2 text-sm text-slate-700">
+        <p className="mt-2 text-sm text-ink/85">
           This company appears relevant, but this person is not the best contact for the identified
           workflow.
         </p>
-        <p className="mt-2 text-sm text-slate-600">
+        <p className="mt-2 text-sm text-muted">
           No verified contact candidates found. ProspectIQ could not establish a suitable contact
           from public evidence.
         </p>
@@ -120,16 +121,16 @@ export function ContactCandidates({
   const anyBusy = busyId !== null;
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <p className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+    <div className="rounded-xl border border-hairline bg-surface p-5">
+      <p className="text-sm font-semibold uppercase tracking-wide text-faint">
         Account qualified &middot; Contact not qualified
       </p>
-      <p className="mt-1 text-sm text-slate-700">
+      <p className="mt-1 text-sm text-ink/85">
         This company appears relevant, but this person is not the best contact for the identified
         workflow.
       </p>
 
-      <h4 className="mb-2 mt-4 text-xs font-semibold uppercase tracking-wide text-slate-400">
+      <h4 className="mb-2 mt-4 text-xs font-semibold uppercase tracking-wide text-faint">
         Suggested contacts at this company
       </h4>
       <ul className="space-y-2.5">
@@ -144,26 +145,24 @@ export function ContactCandidates({
             <li
               key={c.id}
               className={`rounded-lg border p-3 transition-opacity ${
-                isBusy ? 'border-indigo-200 bg-indigo-50/40' : 'border-slate-200'
+                isBusy ? 'border-accent/25 bg-accent/6' : 'border-hairline'
               }`}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-slate-900">{c.name ?? 'Unnamed candidate'}</p>
-                  <p className="truncate text-xs text-slate-500">
+                  <p className="truncate text-sm font-medium text-ink">{c.name ?? 'Unnamed candidate'}</p>
+                  <p className="truncate text-xs text-faint">
                     {[c.role, c.company].filter(Boolean).join(' · ') || 'Role not established'}
                   </p>
                 </div>
-                <span
-                  className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${STATUS_STYLE[c.identity_status] ?? STATUS_STYLE.DISCOVERED}`}
-                >
+                <StatusBadge tone={STATUS_TONE[c.identity_status] ?? STATUS_TONE.DISCOVERED} className="shrink-0">
                   {c.identity_status === 'DISCOVERED' ? 'Not yet verified' : c.identity_status}
-                </span>
+                </StatusBadge>
               </div>
 
-              <p className="mt-1.5 text-xs text-slate-600">{c.reason}</p>
+              <p className="mt-1.5 text-xs text-muted">{c.reason}</p>
               {c.evidence[0] && (
-                <p className="mt-1 truncate text-[11px] text-slate-400" title={c.evidence[0].quote}>
+                <p className="mt-1 truncate text-[11px] text-faint" title={c.evidence[0].quote}>
                   Evidence: &ldquo;{c.evidence[0].quote}&rdquo;
                 </p>
               )}
@@ -174,24 +173,24 @@ export function ContactCandidates({
                     href={c.linkedin_url!}
                     target="_blank"
                     rel="noopener noreferrer nofollow"
-                    className="text-xs font-medium text-indigo-600 hover:underline"
+                    className="text-xs font-medium text-accent hover:underline"
                   >
                     LinkedIn ↗
                   </a>
                 ) : (
-                  <span className="text-xs text-slate-400">No LinkedIn URL</span>
+                  <span className="text-xs text-faint">No LinkedIn URL</span>
                 )}
 
                 {resolved ? (
                   c.resulting_run_id ? (
                     <a
                       href={`/runs/${c.resulting_run_id}`}
-                      className="rounded-lg bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-500"
+                      className="rounded-lg bg-accent px-3 py-1 text-xs font-medium text-white hover:bg-accent-hover"
                     >
                       View run
                     </a>
                   ) : (
-                    <span className="text-xs text-slate-500">
+                    <span className="text-xs text-faint">
                       {c.identity_status === 'AMBIGUOUS'
                         ? 'Ambiguous — choose another or confirm manually'
                         : `${c.identity_status.toLowerCase()} — not eligible to continue`}
@@ -202,7 +201,7 @@ export function ContactCandidates({
                     type="button"
                     disabled
                     title={NO_LINKEDIN_MESSAGE}
-                    className="cursor-not-allowed rounded-lg bg-slate-200 px-3 py-1 text-xs font-medium text-slate-500"
+                    className="cursor-not-allowed rounded-lg bg-ink/8 px-3 py-1 text-xs font-medium text-faint"
                   >
                     Select
                   </button>
@@ -212,7 +211,7 @@ export function ContactCandidates({
                     onClick={() => select(c.id)}
                     disabled={anyBusy}
                     aria-busy={isBusy}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1 text-xs font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {isBusy && (
                       <span
@@ -226,13 +225,13 @@ export function ContactCandidates({
               </div>
 
               {!resolved && !selectable && (
-                <p className="mt-2 text-xs text-slate-500">{NO_LINKEDIN_MESSAGE}</p>
+                <p className="mt-2 text-xs text-faint">{NO_LINKEDIN_MESSAGE}</p>
               )}
 
               {outcome?.message && (
                 <p
                   className={`mt-2 rounded px-2 py-1.5 text-xs ${
-                    outcome.kind === 'error' ? 'bg-red-50 text-red-800' : 'bg-amber-50 text-amber-800'
+                    outcome.kind === 'error' ? 'bg-red-600/8 text-red-800' : 'bg-amber-600/8 text-amber-800'
                   }`}
                   role="status"
                 >

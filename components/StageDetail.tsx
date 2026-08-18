@@ -12,6 +12,7 @@ import {
 } from '@/lib/types';
 import { TopSources } from './TopSources';
 import { ContactCandidates } from './ContactCandidates';
+import { StatusBadge, type StatusTone } from './StatusBadge';
 import type { ContactCandidateRow } from '@/lib/contacts/types';
 import type { EvidenceItem } from '@/lib/qualification/types';
 import { findSourceByUrl, displayDate } from '@/lib/research/top-sources';
@@ -57,13 +58,13 @@ const PURPOSE: Record<StageName, string> = {
     'Finalises the run and hands it to a human. Outreach is always sent manually.',
 };
 
-const STATUS_STYLE: Record<string, string> = {
-  complete: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20',
-  degraded: 'bg-amber-50 text-amber-700 ring-amber-600/20',
-  failed: 'bg-red-50 text-red-700 ring-red-600/20',
-  skipped: 'bg-slate-100 text-slate-500 ring-slate-500/20',
-  running: 'bg-blue-50 text-blue-700 ring-blue-600/20',
-  pending: 'bg-slate-100 text-slate-400 ring-slate-400/20',
+const STATUS_TONE: Record<string, StatusTone> = {
+  complete: 'emerald',
+  degraded: 'amber',
+  failed: 'red',
+  skipped: 'neutral',
+  running: 'accent',
+  pending: 'neutral',
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -78,22 +79,22 @@ const STATUS_LABEL: Record<string, string> = {
 type Output = Record<string, unknown>;
 
 const FIT_TONE: Record<string, string> = {
-  HIGH: 'border-emerald-200 bg-emerald-50 text-emerald-900',
-  MEDIUM: 'border-sky-200 bg-sky-50 text-sky-900',
-  LOW: 'border-amber-200 bg-amber-50 text-amber-900',
-  UNKNOWN: 'border-slate-200 bg-slate-50 text-slate-700',
+  HIGH: 'border-emerald-600/20 bg-emerald-600/6 text-emerald-900',
+  MEDIUM: 'border-accent/20 bg-accent/6 text-accent',
+  LOW: 'border-amber-600/20 bg-amber-600/6 text-amber-900',
+  UNKNOWN: 'border-hairline bg-app text-muted',
 };
 
 const BASIS_TONE: Record<string, string> = {
-  OBSERVED: 'bg-emerald-100 text-emerald-800',
-  INFERRED: 'bg-amber-100 text-amber-800',
-  UNKNOWN: 'bg-slate-100 text-slate-500',
+  OBSERVED: 'bg-emerald-600/10 text-emerald-800',
+  INFERRED: 'bg-amber-600/10 text-amber-800',
+  UNKNOWN: 'bg-ink/6 text-faint',
 };
 
 const QUAL_TONE: Record<string, string> = {
-  QUALIFIED: 'border-emerald-200 bg-emerald-50 text-emerald-900',
-  BORDERLINE: 'border-amber-200 bg-amber-50 text-amber-900',
-  NOT_QUALIFIED: 'border-slate-300 bg-slate-50 text-slate-800',
+  QUALIFIED: 'border-emerald-600/20 bg-emerald-600/6 text-emerald-900',
+  BORDERLINE: 'border-amber-600/20 bg-amber-600/6 text-amber-900',
+  NOT_QUALIFIED: 'border-hairline bg-app text-ink',
 };
 
 /** One line per qualification decision-matrix cell — see lib/qualification/types.ts's QualificationAction. */
@@ -134,16 +135,16 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   if (value === null || value === undefined || value === '') return null;
   return (
     <div className="flex gap-3 py-1.5 text-sm">
-      <dt className="w-44 shrink-0 text-slate-500">{label}</dt>
-      <dd className="min-w-0 flex-1 break-words text-slate-800">{value}</dd>
+      <dt className="w-44 shrink-0 text-faint">{label}</dt>
+      <dd className="min-w-0 flex-1 break-words text-ink/90">{value}</dd>
     </div>
   );
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="border-t border-slate-100 py-4 first:border-t-0">
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">{title}</h3>
+    <section className="border-t border-hairline py-4 first:border-t-0">
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-faint">{title}</h3>
       {children}
     </section>
   );
@@ -161,22 +162,22 @@ function SourceLine({ source }: { source: SourceRow }) {
   const domain = hostOf(source.canonical_url || source.url);
   const title = source.title?.trim();
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-slate-100 pt-2 text-xs">
+    <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-hairline pt-2 text-xs">
       <a
         href={source.url}
         target="_blank"
         rel="noopener noreferrer nofollow"
-        className="min-w-0 truncate font-medium text-indigo-700 hover:underline"
+        className="min-w-0 truncate font-medium text-accent hover:underline"
       >
         {title || 'Open source'}
       </a>
-      {domain && <span className="text-slate-400">· {domain}</span>}
-      {date && <span className="text-slate-400">· {date}</span>}
+      {domain && <span className="text-faint">· {domain}</span>}
+      {date && <span className="text-faint">· {date}</span>}
       <a
         href={source.url}
         target="_blank"
         rel="noopener noreferrer nofollow"
-        className="ml-auto shrink-0 font-medium text-slate-500 hover:text-indigo-600 hover:underline"
+        className="ml-auto shrink-0 font-medium text-muted hover:text-accent hover:underline"
       >
         Open ↗
       </a>
@@ -243,18 +244,18 @@ function RegenerateMessageButton({ runId }: { runId: string }) {
         type="button"
         onClick={regenerate}
         disabled={state === 'working'}
-        className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+        className="rounded-lg border border-hairline px-3 py-1.5 text-xs font-medium text-muted hover:bg-app disabled:opacity-50"
       >
         {state === 'working' ? 'Regenerating…' : 'Regenerate message'}
       </button>
       {state === 'working' && (
-        <p className="mt-1.5 rounded-lg bg-indigo-50 px-2.5 py-1.5 text-xs text-indigo-800">
+        <p className="mt-1.5 rounded-lg bg-accent/8 px-2.5 py-1.5 text-xs text-accent">
           Writing a new version of this message — same selected hook and evidence, new wording. This
           keeps the current draft until the new one is validated.
         </p>
       )}
       {error && (
-        <p className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-700">{error}</p>
+        <p className="mt-1.5 rounded-lg bg-red-600/8 px-2.5 py-1.5 text-xs text-red-700">{error}</p>
       )}
     </div>
   );
@@ -262,10 +263,10 @@ function RegenerateMessageButton({ runId }: { runId: string }) {
 
 function Stat({ label, value, tone = 'neutral' }: { label: string; value: React.ReactNode; tone?: 'neutral' | 'good' | 'warn' | 'bad' }) {
   const tones = {
-    neutral: 'bg-slate-50 text-slate-900',
-    good: 'bg-emerald-50 text-emerald-800',
-    warn: 'bg-amber-50 text-amber-800',
-    bad: 'bg-red-50 text-red-800',
+    neutral: 'bg-app text-ink',
+    good: 'bg-emerald-600/8 text-emerald-800',
+    warn: 'bg-amber-600/8 text-amber-800',
+    bad: 'bg-red-600/8 text-red-800',
   };
   return (
     <div className={`rounded-lg px-3 py-2 ${tones[tone]}`}>
@@ -303,44 +304,40 @@ export function StageDetail({
   }
 
   return (
-    <article className="rounded-xl border border-slate-200 bg-white shadow-sm">
-      <header className="border-b border-slate-100 px-5 py-4">
+    <article className="rounded-xl border border-hairline bg-surface">
+      <header className="border-b border-hairline px-5 py-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
+            <p className="text-xs font-medium uppercase tracking-wider text-faint">
               Stage {stage.stage_order + 1} of {14}
             </p>
-            <h1 className="mt-0.5 text-xl font-semibold tracking-tight text-slate-900">
+            <h1 className="font-display mt-0.5 text-xl font-semibold tracking-tight text-ink">
               {STAGE_LABELS[name]}
             </h1>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-sm tabular-nums text-slate-500">{formatDuration(stage.duration_ms)}</span>
-            <span
-              className={`rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${
-                STATUS_STYLE[stage.status] ?? STATUS_STYLE.pending
-              }`}
-            >
+            <span className="text-sm tabular-nums text-faint">{formatDuration(stage.duration_ms)}</span>
+            <StatusBadge tone={STATUS_TONE[stage.status] ?? STATUS_TONE.pending}>
               {STATUS_LABEL[stage.status] ?? stage.status}
-            </span>
+            </StatusBadge>
           </div>
         </div>
       </header>
 
       <div className="px-5">
         <Section title="What this stage does">
-          <p className="text-sm leading-relaxed text-slate-700">{PURPOSE[name]}</p>
+          <p className="text-sm leading-relaxed text-muted">{PURPOSE[name]}</p>
         </Section>
 
         {stage.summary && (
           <Section title="Result">
-            <p className="text-sm leading-relaxed text-slate-800">{stage.summary}</p>
+            <p className="text-sm leading-relaxed text-ink/90">{stage.summary}</p>
           </Section>
         )}
 
         {stage.error && (
           <Section title="What went wrong">
-            <p className="rounded-lg bg-red-50 px-3 py-2 text-sm leading-relaxed text-red-800">
+            <p className="rounded-lg bg-red-600/8 px-3 py-2 text-sm leading-relaxed text-red-800">
               {stage.error}
             </p>
           </Section>
@@ -352,14 +349,14 @@ export function StageDetail({
           <div className="flex items-center gap-2">
             <button
               onClick={() => setShowJson((v) => !v)}
-              className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+              className="rounded-lg border border-hairline px-3 py-1.5 text-xs font-medium text-muted hover:bg-app"
             >
               {showJson ? 'Hide raw JSON' : 'Show raw JSON'}
             </button>
             {showJson && (
               <button
                 onClick={copyJson}
-                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                className="rounded-lg border border-hairline px-3 py-1.5 text-xs font-medium text-muted hover:bg-app"
               >
                 {copied ? 'Copied' : 'Copy JSON'}
               </button>
@@ -416,7 +413,7 @@ function StageBody({
             </dl>
           </Section>
           <Section title="Why it matters">
-            <p className="text-sm text-slate-700">
+            <p className="text-sm text-ink/85">
               Every locale of a LinkedIn URL collapses to one profile key, so a citation from any
               country subdomain is recognised later as the same source.
             </p>
@@ -454,7 +451,7 @@ function StageBody({
               <Stat label="Retrieval time" value={formatDuration(get<number>(output, 'profile_fetch_ms') ?? null)} />
             </div>
             {access?.reason ? (
-              <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">{String(access.reason)}</p>
+              <p className="mt-3 rounded-lg bg-app px-3 py-2 text-sm text-ink/85">{String(access.reason)}</p>
             ) : null}
           </Section>
 
@@ -470,17 +467,17 @@ function StageBody({
               </dl>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {found.map((f) => (
-                  <span key={f} className="rounded bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700">{f}</span>
+                  <span key={f} className="rounded bg-emerald-600/8 px-2 py-0.5 text-xs text-emerald-700">{f}</span>
                 ))}
                 {missing.map((f) => (
-                  <span key={f} className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-500 line-through">{f}</span>
+                  <span key={f} className="rounded bg-ink/6 px-2 py-0.5 text-xs text-faint line-through">{f}</span>
                 ))}
               </div>
             </Section>
           )}
 
           <Section title="Why it matters">
-            <p className="text-sm text-slate-700">
+            <p className="text-sm text-ink/85">
               {identity?.company
                 ? `Because the employer resolved to "${identity.company}", the next stage can research the company as well as the person.`
                 : 'Without a resolved employer, company-level research cannot be built and the run relies on person-level sources only.'}
@@ -501,10 +498,10 @@ function StageBody({
           <Section title="Searches performed">
             <ul className="space-y-1">
               {queries.map((q, i) => (
-                <li key={i} className="rounded bg-slate-50 px-2.5 py-1.5 text-xs text-slate-700">{q}</li>
+                <li key={i} className="rounded bg-app px-2.5 py-1.5 text-xs text-ink/85">{q}</li>
               ))}
             </ul>
-            <p className="mt-2 text-xs text-slate-500">
+            <p className="mt-2 text-xs text-faint">
               {String(round?.queries_ok ?? 0)} of {String(round?.queries_run ?? 0)} search calls succeeded.
             </p>
           </Section>
@@ -516,7 +513,7 @@ function StageBody({
               <Stat label="Unavailable" value={String(evidence?.UNAVAILABLE ?? 0)} tone={evidence?.UNAVAILABLE ? 'bad' : 'neutral'} />
             </div>
             {note && (
-              <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">{note}</p>
+              <p className="mt-3 rounded-lg bg-amber-600/6 px-3 py-2 text-sm text-amber-800">{note}</p>
             )}
           </Section>
           <Section title="Top sources">
@@ -532,7 +529,7 @@ function StageBody({
             />
           </Section>
           <Section title="Why it matters">
-            <p className="text-sm text-slate-700">
+            <p className="text-sm text-ink/85">
               Full evidence means a page was retrieved and read. Snippet evidence still counts, but
               carries lower confidence and needs corroboration before it can support a claim.
               Retrieving a source is not the same as using it: only sources marked{' '}
@@ -554,7 +551,7 @@ function StageBody({
           <Section title="Evidence checked">
             {fe ? (
               <>
-                <p className="text-sm text-slate-800">{String(fe.summary)}</p>
+                <p className="text-sm text-ink/90">{String(fe.summary)}</p>
                 <ul className="mt-2 space-y-1 text-sm">
                   {((fe.corroborated as string[]) ?? []).map((f) => (
                     <li key={f} className="text-emerald-700">✓ {f} — corroborated</li>
@@ -563,22 +560,22 @@ function StageBody({
                     <li key={f} className="text-amber-700">⚠ {f} — conflicting</li>
                   ))}
                   {((fe.unavailable as string[]) ?? []).map((f) => (
-                    <li key={f} className="text-slate-400">· {f} — unavailable</li>
+                    <li key={f} className="text-faint">· {f} — unavailable</li>
                   ))}
                 </ul>
-                <p className="mt-2 text-xs text-slate-500">
+                <p className="mt-2 text-xs text-faint">
                   A field the candidate never carried cannot have been corroborated, so unavailable
                   fields are never counted as evidence.
                 </p>
               </>
             ) : (
-              <p className="text-sm text-slate-600">No field-level evidence was recorded.</p>
+              <p className="text-sm text-muted">No field-level evidence was recorded.</p>
             )}
           </Section>
 
           {recovery ? (
             <Section title="Missing field verification">
-              <p className="text-sm text-slate-700">
+              <p className="text-sm text-ink/85">
                 Some identity fields were unavailable, so ProspectIQ checked public sources to
                 verify the missing information.
               </p>
@@ -587,7 +584,7 @@ function StageBody({
                   <li
                     key={i}
                     className={`rounded-lg px-3 py-2 text-sm ${
-                      r.recovered ? 'bg-emerald-50 text-emerald-900' : 'bg-amber-50 text-amber-900'
+                      r.recovered ? 'bg-emerald-600/8 text-emerald-900' : 'bg-amber-600/6 text-amber-900'
                     }`}
                   >
                     <span className="font-medium capitalize">{String(r.field)}: </span>
@@ -618,7 +615,7 @@ function StageBody({
                   </li>
                 ))}
               </ul>
-              <p className="mt-2 text-xs text-slate-500">
+              <p className="mt-2 text-xs text-faint">
                 A value is accepted only when a retrieved source states it for this person. A source
                 describing someone else with the same name is treated as a conflict, never a match.
               </p>
@@ -670,7 +667,7 @@ function StageBody({
 
           {(fit.why_this_person as string[])?.length ? (
             <Section title="Why this person">
-              <ul className="list-inside list-disc space-y-1 text-sm text-slate-700">
+              <ul className="list-inside list-disc space-y-1 text-sm text-ink/85">
                 {(fit.why_this_person as string[]).map((r, i) => <li key={i}>{r}</li>)}
               </ul>
             </Section>
@@ -678,7 +675,7 @@ function StageBody({
 
           {(fit.why_not_this_person as string[])?.length ? (
             <Section title="Why not this person">
-              <ul className="list-inside list-disc space-y-1 text-sm text-slate-700">
+              <ul className="list-inside list-disc space-y-1 text-sm text-ink/85">
                 {(fit.why_not_this_person as string[]).map((r, i) => <li key={i}>{r}</li>)}
               </ul>
             </Section>
@@ -686,14 +683,14 @@ function StageBody({
 
           {(fit.missing_information as string[])?.length ? (
             <Section title="What we could not establish">
-              <ul className="list-inside list-disc space-y-1 text-sm text-slate-600">
+              <ul className="list-inside list-disc space-y-1 text-sm text-muted">
                 {(fit.missing_information as string[]).map((r, i) => <li key={i}>{r}</li>)}
               </ul>
             </Section>
           ) : null}
 
           <Section title="Why it matters">
-            <p className="text-sm text-slate-700">
+            <p className="text-sm text-ink/85">
               A person who does not own or influence the relevant workflows is not a good target,
               however interesting their company is. This is a targeting judgment about the role —
               not an assessment of the individual.
@@ -735,7 +732,7 @@ function StageBody({
 
           {matches.length > 0 ? (
             <Section title="Capability matching">
-              <p className="mb-2 text-sm text-slate-600">
+              <p className="mb-2 text-sm text-muted">
                 Qualification basis:{' '}
                 {matches.filter((m) => m.basis === 'OBSERVED' && ((m.evidence as EvidenceItem[]) ?? []).length > 0).length}{' '}
                 observed use case
@@ -746,28 +743,28 @@ function StageBody({
               </p>
               <ul className="space-y-2">
                 {matches.map((m, i) => (
-                  <li key={i} className="rounded-lg border border-slate-200 p-3">
+                  <li key={i} className="rounded-lg border border-hairline p-3">
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
-                      <span className="flex items-center gap-1.5 text-sm font-medium text-slate-800">
+                      <span className="flex items-center gap-1.5 text-sm font-medium text-ink/90">
                         <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${BASIS_TONE[String(m.basis)] ?? BASIS_TONE.UNKNOWN}`}>
                           {String(m.basis ?? 'UNKNOWN')}
                         </span>
                         {String(m.capability_name)}
                       </span>
-                      <span className="text-xs tabular-nums text-slate-500">
+                      <span className="text-xs tabular-nums text-faint">
                         fit {String(m.fit_strength)}/100
                       </span>
                     </div>
-                    <p className="mt-1 text-sm text-slate-700">{String(m.reason)}</p>
+                    <p className="mt-1 text-sm text-ink/85">{String(m.reason)}</p>
                     {m.company_signal ? (
-                      <p className="mt-1 text-xs text-slate-500">
+                      <p className="mt-1 text-xs text-faint">
                         Observed: {String(m.company_signal)}
                       </p>
                     ) : null}
                     {(m.evidence as EvidenceItem[])?.length ? (
                       <ul className="mt-1 space-y-0.5">
                         {(m.evidence as EvidenceItem[]).slice(0, 3).map((e, j) => (
-                          <li key={j} className="truncate text-xs text-slate-400" title={`${e.url} — "${e.quote}"`}>
+                          <li key={j} className="truncate text-xs text-faint" title={`${e.url} — "${e.quote}"`}>
                             {e.url}
                           </li>
                         ))}
@@ -779,7 +776,7 @@ function StageBody({
             </Section>
           ) : (
             <Section title="Capability matching">
-              <p className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
+              <p className="rounded-lg bg-app px-3 py-2 text-sm text-muted">
                 No configured capability could be matched to observable characteristics of this
                 company.
               </p>
@@ -788,7 +785,7 @@ function StageBody({
 
           {(fit.missing_information as string[])?.length ? (
             <Section title="What we could not establish">
-              <ul className="list-inside list-disc space-y-1 text-sm text-slate-600">
+              <ul className="list-inside list-disc space-y-1 text-sm text-muted">
                 {(fit.missing_information as string[]).map((r, i) => <li key={i}>{r}</li>)}
               </ul>
             </Section>
@@ -801,7 +798,7 @@ function StageBody({
                   <span className="flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider">
                     {status.replace(/_/g, ' ')}
                     {tq.action === 'EXPLORATORY_OUTREACH' || tq.action === 'EXPLORATORY_OUTREACH_IF_SIGNAL' ? (
-                      <span className="rounded-full bg-white/60 px-1.5 py-0.5 text-[10px] font-medium normal-case tracking-normal text-amber-900">
+                      <span className="rounded-full bg-surface/60 px-1.5 py-0.5 text-[10px] font-medium normal-case tracking-normal text-amber-900">
                         exploratory outreach
                       </span>
                     ) : null}
@@ -820,14 +817,14 @@ function StageBody({
                   </p>
                 ) : null}
               </div>
-              <p className="mt-2 text-xs text-slate-500">
+              <p className="mt-2 text-xs text-faint">
                 Overall fit is the weaker of the two scores, not an average — a strong company does
                 not rescue an irrelevant prospect, and vice versa. OBSERVED means a retrieved source
                 shows the workflow; INFERRED means it is plausible from context but unconfirmed, and
                 inference alone cannot produce a high company fit.
               </p>
               {fit.evidence_adjustment ? (
-                <p className="mt-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                <p className="mt-2 rounded bg-amber-600/6 px-3 py-2 text-xs text-amber-800">
                   {String(fit.evidence_adjustment)}
                 </p>
               ) : null}
@@ -844,7 +841,7 @@ function StageBody({
         // is a no-op here, not re-derive or guess WHY from a status code.
         return (
           <Section title="Not applicable">
-            <p className="text-sm text-slate-600">
+            <p className="text-sm text-muted">
               This run did not reach the specific state — a qualified company paired with a contact
               who is not — so no alternative contacts were searched for. See Result above for why.
             </p>
@@ -857,7 +854,7 @@ function StageBody({
         <>
           {roles.length > 0 && (
             <Section title="Roles searched">
-              <p className="text-sm text-slate-700">
+              <p className="text-sm text-ink/85">
                 Derived from the qualified workflow, not guessed by seniority: {roles.join(', ')}
                 {company ? ` at ${company}` : ''}.
               </p>
@@ -865,7 +862,7 @@ function StageBody({
           )}
           {get<string>(output, 'persistence_error') && (
             <Section title="Could not be saved">
-              <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              <p className="rounded-lg bg-amber-600/6 px-3 py-2 text-sm text-amber-800">
                 Candidates were found but could not be stored ({get<string>(output, 'persistence_error')}), so
                 they cannot be selected yet. Retry this run once the issue is resolved.
               </p>
@@ -894,7 +891,7 @@ function StageBody({
             <TopSources sources={sources} signals={signals} stage="collect_signals" />
           </Section>
           <Section title="Why it matters">
-            <p className="text-sm text-slate-700">
+            <p className="text-sm text-ink/85">
               This is the complete set of material the AI analysis is allowed to use. It cannot cite
               anything outside this set — citations are checked against it mechanically.
             </p>
@@ -932,14 +929,14 @@ function StageBody({
                   const c = r.components as Record<string, number>;
                   const source = findSourceByUrl(sources, r.source_url as string | undefined);
                   return (
-                    <div key={i} className="rounded-lg border border-slate-200 p-3">
+                    <div key={i} className="rounded-lg border border-hairline p-3">
                       <div className="flex items-start justify-between gap-3">
-                        <p className="text-sm text-slate-800">{String(r.signal)}</p>
-                        <span className="shrink-0 rounded bg-slate-100 px-2 py-0.5 text-sm font-semibold tabular-nums">
+                        <p className="text-sm text-ink/90">{String(r.signal)}</p>
+                        <span className="shrink-0 rounded bg-ink/6 px-2 py-0.5 text-sm font-semibold tabular-nums">
                           {String(r.composite_score)}
                         </span>
                       </div>
-                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-faint">
                         {Object.entries(c ?? {}).map(([k, v]) => (
                           <span key={k}>{k} {v}</span>
                         ))}
@@ -958,7 +955,7 @@ function StageBody({
             <Section title="Signals rejected by verification">
               <div className="space-y-2">
                 {rejected.map((r, i) => (
-                  <div key={i} className="rounded-lg bg-amber-50 p-3">
+                  <div key={i} className="rounded-lg bg-amber-600/6 p-3">
                     <p className="text-sm text-amber-900">{String(r.signal)}</p>
                     <p className="mt-1 text-xs text-amber-800">{String(r.reason)}</p>
                   </div>
@@ -968,7 +965,7 @@ function StageBody({
           )}
 
           <Section title="Why it matters">
-            <p className="text-sm text-slate-700">
+            <p className="text-sm text-ink/85">
               A signal is only eligible if it cites a source we actually retrieved and quotes text
               that genuinely appears there. Rejected signals are shown rather than silently dropped.
             </p>
@@ -988,16 +985,16 @@ function StageBody({
         return (
           <>
             <Section title="Selected hook">
-              <div className="space-y-3 rounded-lg border border-indigo-200 bg-indigo-50/40 p-4">
+              <div className="space-y-3 rounded-lg border border-accent/25 bg-accent/8/40 p-4">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-indigo-700">Signal</p>
-                  <p className="mt-0.5 text-sm font-medium text-slate-900">{String(selected.signal)}</p>
-                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                    <span className="rounded bg-white px-1.5 py-0.5 ring-1 ring-slate-200">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-accent">Signal</p>
+                  <p className="mt-0.5 text-sm font-medium text-ink">{String(selected.signal)}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-faint">
+                    <span className="rounded bg-surface px-1.5 py-0.5 ring-1 ring-hairline">
                       {selected.signal_level === 'COMPANY' ? 'Company-level' : 'Person-level'}
                     </span>
                     <span>{String(selected.published_date ?? 'undated')}</span>
-                    <span className="rounded bg-white px-1.5 py-0.5 ring-1 ring-slate-200">
+                    <span className="rounded bg-surface px-1.5 py-0.5 ring-1 ring-hairline">
                       {String(selected.evidence_level ?? 'SNIPPET')} evidence
                     </span>
                   </div>
@@ -1005,15 +1002,15 @@ function StageBody({
 
                 {selected.why_it_matters ? (
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-wider text-indigo-700">Why this matters</p>
-                    <p className="mt-0.5 text-sm text-slate-700">{String(selected.why_it_matters)}</p>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-accent">Why this matters</p>
+                    <p className="mt-0.5 text-sm text-ink/85">{String(selected.why_it_matters)}</p>
                   </div>
                 ) : null}
 
                 {selected.role_relevance || selected.prospect_role ? (
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-wider text-indigo-700">Why this prospect</p>
-                    <p className="mt-0.5 text-sm text-slate-700">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-accent">Why this prospect</p>
+                    <p className="mt-0.5 text-sm text-ink/85">
                       {String(
                         selected.role_relevance ??
                           `The signal concerns their employer, and their role is ${selected.prospect_role}.`,
@@ -1024,32 +1021,32 @@ function StageBody({
 
                 {selected.outreach_rationale ? (
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-wider text-indigo-700">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-accent">
                       Why this creates an outreach opportunity
                     </p>
-                    <p className="mt-0.5 text-sm text-slate-700">{String(selected.outreach_rationale)}</p>
+                    <p className="mt-0.5 text-sm text-ink/85">{String(selected.outreach_rationale)}</p>
                   </div>
                 ) : null}
 
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-indigo-700">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-accent">
                     Source supporting this hook
                   </p>
                   {selected.supporting_quote ? (
-                    <blockquote className="mt-0.5 border-l-2 border-indigo-300 pl-2 text-sm italic text-slate-600">
+                    <blockquote className="mt-0.5 border-l-2 border-accent/25 pl-2 text-sm italic text-muted">
                       “{String(selected.supporting_quote)}”
                     </blockquote>
                   ) : null}
-                  <div className="mt-1.5 rounded-lg border border-indigo-100 bg-white px-2.5 py-2">
+                  <div className="mt-1.5 rounded-lg border border-accent/20 bg-surface px-2.5 py-2">
                     <a
                       href={String(selected.source_url)}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="block break-words text-sm font-medium text-indigo-700 hover:underline"
+                      className="block break-words text-sm font-medium text-accent hover:underline"
                     >
                       {String(selected.source_title || selected.source_url)}
                     </a>
-                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-faint">
                       <span className="truncate">{hostOf(String(selected.source_url ?? ''))}</span>
                       {selected.published_date ? (
                         <>
@@ -1061,7 +1058,7 @@ function StageBody({
                         href={String(selected.source_url)}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="ml-auto shrink-0 font-medium text-slate-500 hover:text-indigo-600 hover:underline"
+                        className="ml-auto shrink-0 font-medium text-faint hover:text-accent hover:underline"
                       >
                         Open ↗
                       </a>
@@ -1070,10 +1067,10 @@ function StageBody({
                 </div>
 
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-indigo-700">Confidence</p>
-                  <p className="mt-0.5 text-sm tabular-nums text-slate-800">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-accent">Confidence</p>
+                  <p className="mt-0.5 text-sm tabular-nums text-ink/90">
                     {String(get<number>(output, 'confidence') ?? selected.composite_score)}/100
-                    <span className="ml-2 text-xs text-slate-500">
+                    <span className="ml-2 text-xs text-faint">
                       (signal score {String(selected.composite_score)})
                     </span>
                   </p>
@@ -1083,7 +1080,7 @@ function StageBody({
 
             {get<string>(output, 'selection_reason') ? (
               <Section title="Why this one over the others">
-                <p className="text-sm text-slate-700">{get<string>(output, 'selection_reason')}</p>
+                <p className="text-sm text-ink/85">{get<string>(output, 'selection_reason')}</p>
               </Section>
             ) : null}
 
@@ -1092,8 +1089,8 @@ function StageBody({
                 <ul className="space-y-1.5">
                   {rejectedCandidates.map((r, i) => (
                     <li key={i} className="text-sm">
-                      <span className="text-slate-800">{String(r.signal)}</span>
-                      <span className="text-slate-500"> — {String(r.reason)}</span>
+                      <span className="text-ink/90">{String(r.signal)}</span>
+                      <span className="text-faint"> — {String(r.reason)}</span>
                     </li>
                   ))}
                 </ul>
@@ -1105,8 +1102,8 @@ function StageBody({
                 <ul className="space-y-1.5">
                   {alternatives.map((a, i) => (
                     <li key={i} className="text-sm">
-                      <span className="text-slate-800">{String(a.signal)}</span>
-                      <span className="text-slate-500"> — {String(a.why_not)}</span>
+                      <span className="text-ink/90">{String(a.signal)}</span>
+                      <span className="text-faint"> — {String(a.why_not)}</span>
                     </li>
                   ))}
                 </ul>
@@ -1120,7 +1117,7 @@ function StageBody({
       return (
         <>
           <Section title="Needs manual review">
-            <div className="rounded-lg border border-amber-300 bg-amber-50 p-4">
+            <div className="rounded-lg border border-amber-600/25 bg-amber-600/6 p-4">
               <p className="text-sm font-semibold uppercase tracking-wider text-amber-900">
                 No verified outreach hook found
               </p>
@@ -1151,9 +1148,9 @@ function StageBody({
             <Section title="Candidate signals and why each was rejected">
               <ul className="space-y-1.5">
                 {rejectedCandidates.map((r, i) => (
-                  <li key={i} className="rounded-lg bg-slate-50 px-3 py-2 text-sm">
-                    <span className="text-slate-800">{String(r.signal)}</span>
-                    <span className="block text-xs text-slate-500">{String(r.reason)}</span>
+                  <li key={i} className="rounded-lg bg-app px-3 py-2 text-sm">
+                    <span className="text-ink/90">{String(r.signal)}</span>
+                    <span className="block text-xs text-faint">{String(r.reason)}</span>
                   </li>
                 ))}
               </ul>
@@ -1162,14 +1159,14 @@ function StageBody({
 
           {missing.length > 0 ? (
             <Section title="What would unblock this">
-              <ul className="list-inside list-disc text-sm text-slate-700">
+              <ul className="list-inside list-disc text-sm text-ink/85">
                 {missing.map((m, i) => <li key={i}>{m}</li>)}
               </ul>
             </Section>
           ) : null}
 
           <Section title="Why it matters">
-            <p className="text-sm text-slate-700">
+            <p className="text-sm text-ink/85">
               ProspectIQ does not invent personalization when the available evidence is
               insufficient. A human can review the coverage above and decide whether to supply more
               context or move on.
@@ -1186,7 +1183,7 @@ function StageBody({
         return (
           <>
             <Section title="No message generated">
-              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3">
+              <div className="rounded-lg border border-amber-600/25 bg-amber-600/6 p-3">
                 <p className="text-sm font-semibold uppercase tracking-wide text-amber-900">
                   No verified outreach hook found
                 </p>
@@ -1194,7 +1191,7 @@ function StageBody({
               </div>
             </Section>
             <Section title="Why it matters">
-              <p className="text-sm text-slate-700">
+              <p className="text-sm text-ink/85">
                 The run stops short of writing outreach rather than producing a message that only
                 looks personalised. A human can review the evidence and decide how to proceed.
               </p>
@@ -1214,17 +1211,17 @@ function StageBody({
               <Row label="Subject" value={get<string>(output, 'subject')} />
               <Row label="Personalisation basis" value={get<string>(output, 'outreach_angle')} />
             </dl>
-            <p className="mt-3 whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-sm leading-relaxed text-slate-800">
+            <p className="mt-3 whitespace-pre-wrap rounded-lg bg-app p-3 text-sm leading-relaxed text-ink/90">
               {get<string>(output, 'message_text')}
             </p>
             {get<number>(output, 'word_count') ? (
-              <p className="mt-1.5 text-xs text-slate-500">{get<number>(output, 'word_count')} words</p>
+              <p className="mt-1.5 text-xs text-faint">{get<number>(output, 'word_count')} words</p>
             ) : null}
           </Section>
 
           {opener ? (
             <Section title="Opener quality">
-              <p className={`rounded-lg px-3 py-2 text-sm ${opener.passed ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'}`}>
+              <p className={`rounded-lg px-3 py-2 text-sm ${opener.passed ? 'bg-emerald-600/8 text-emerald-800' : 'bg-amber-600/6 text-amber-800'}`}>
                 {opener.passed
                   ? `The opening reads as an observation rather than a research summary (${String(opener.word_count)} words).`
                   : ((opener.final_failures as string[]) ?? []).join(' ')}
@@ -1234,7 +1231,7 @@ function StageBody({
 
           {gate ? (
             <Section title="Personalisation check">
-              <p className={`rounded-lg px-3 py-2 text-sm ${gate.passed ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'}`}>
+              <p className={`rounded-lg px-3 py-2 text-sm ${gate.passed ? 'bg-emerald-600/8 text-emerald-800' : 'bg-amber-600/6 text-amber-800'}`}>
                 {gate.passed
                   ? 'The draft engages with the specifics of the selected hook, so it could not be sent unchanged to a different prospect.'
                   : String(gate.final_reason ?? 'The draft still reads as generic.')}
@@ -1243,7 +1240,7 @@ function StageBody({
             </Section>
           ) : null}
           <Section title="Why it matters">
-            <p className="text-sm text-slate-700">
+            <p className="text-sm text-ink/85">
               {mode === 'personalized'
                 ? 'This draft opens on a signal that survived verification, so its personalisation is traceable to a real source.'
                 : 'Because no hook survived verification, this draft deliberately references no research findings rather than inventing personalisation.'}
@@ -1256,47 +1253,47 @@ function StageBody({
     case 'validate_claims': {
       const claims = get<Output[]>(output, 'claims') ?? [];
       const tone: Record<string, string> = {
-        SUPPORTED: 'bg-emerald-50 text-emerald-700',
-        ALLOWED: 'bg-sky-50 text-sky-700',
-        UNCERTAIN: 'bg-amber-50 text-amber-700',
-        UNSUPPORTED: 'bg-red-50 text-red-700',
+        SUPPORTED: 'bg-emerald-600/8 text-emerald-700',
+        ALLOWED: 'bg-accent/8 text-accent',
+        UNCERTAIN: 'bg-amber-600/6 text-amber-700',
+        UNSUPPORTED: 'bg-red-600/8 text-red-700',
       };
       return (
         <>
           <Section title="Claims checked">
             <div className="space-y-2">
               {claims.map((c, i) => (
-                <div key={i} className="rounded-lg border border-slate-200 p-3">
+                <div key={i} className="rounded-lg border border-hairline p-3">
                   <div className="flex items-start justify-between gap-3">
-                    <p className="text-sm text-slate-800">{String(c.claim)}</p>
-                    <span className={`shrink-0 rounded px-2 py-0.5 text-xs font-semibold ${tone[String(c.verdict)] ?? 'bg-slate-100 text-slate-600'}`}>
+                    <p className="text-sm text-ink/90">{String(c.claim)}</p>
+                    <span className={`shrink-0 rounded px-2 py-0.5 text-xs font-semibold ${tone[String(c.verdict)] ?? 'bg-ink/6 text-muted'}`}>
                       {String(c.verdict)}
                     </span>
                   </div>
-                  <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-                    <span className="rounded bg-slate-100 px-1.5 py-0.5">{String(c.type ?? '').replace(/_/g, ' ').toLowerCase()}</span>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-faint">
+                    <span className="rounded bg-ink/6 px-1.5 py-0.5">{String(c.type ?? '').replace(/_/g, ' ').toLowerCase()}</span>
                     <span>{c.requires_external_evidence ? 'evidence required' : 'no external evidence required'}</span>
                     {c.evidence_url ? (
-                      <a href={String(c.evidence_url)} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">
+                      <a href={String(c.evidence_url)} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
                         source
                       </a>
                     ) : null}
                   </div>
                   {c.explanation ? (
-                    <p className="mt-1 text-xs text-slate-600">{humanize(String(c.explanation))}</p>
+                    <p className="mt-1 text-xs text-muted">{humanize(String(c.explanation))}</p>
                   ) : null}
                 </div>
               ))}
             </div>
           </Section>
           <Section title="How to read these verdicts">
-            <dl className="space-y-1.5 text-sm text-slate-700">
+            <dl className="space-y-1.5 text-sm text-ink/85">
               <div>
                 <dt className="inline font-medium text-emerald-700">SUPPORTED — </dt>
                 <dd className="inline">a retrieved source establishes the claim.</dd>
               </div>
               <div>
-                <dt className="inline font-medium text-sky-700">ALLOWED — </dt>
+                <dt className="inline font-medium text-accent">ALLOWED — </dt>
                 <dd className="inline">
                   a statement about your own product or ordinary outreach phrasing; no third-party
                   evidence is required.
@@ -1338,13 +1335,13 @@ function StageBody({
               />
             </div>
             {reasons.length > 0 && (
-              <ul className="mt-3 list-inside list-disc text-sm text-slate-700">
+              <ul className="mt-3 list-inside list-disc text-sm text-ink/85">
                 {reasons.map((r, i) => <li key={i}>{r}</li>)}
               </ul>
             )}
           </Section>
           <Section title="Why it matters">
-            <p className="text-sm text-slate-700">
+            <p className="text-sm text-ink/85">
               The run stops here. Outreach is always sent manually — a human reviews, edits and
               approves the draft before it is ever used.
             </p>

@@ -6,10 +6,10 @@ import type { IdentityVerification } from '@/lib/identity/types';
 import { explainCandidate } from '@/lib/identity/explain';
 
 const STATUS_TONE: Record<string, string> = {
-  VERIFIED: 'border-emerald-300 bg-emerald-50 text-emerald-900',
-  PARTIAL: 'border-amber-300 bg-amber-50 text-amber-900',
-  AMBIGUOUS: 'border-amber-400 bg-amber-50 text-amber-900',
-  FAILED: 'border-red-300 bg-red-50 text-red-900',
+  VERIFIED: 'border-emerald-600/25 bg-emerald-600/6 text-emerald-900',
+  PARTIAL: 'border-amber-600/25 bg-amber-600/6 text-amber-900',
+  AMBIGUOUS: 'border-amber-600/30 bg-amber-600/6 text-amber-900',
+  FAILED: 'border-red-600/25 bg-red-600/6 text-red-900',
 };
 
 /**
@@ -56,39 +56,39 @@ export function IdentityCard({
 
   if (needsChoice) {
     return (
-      <div className="rounded-xl border border-amber-300 bg-white p-5 shadow-sm">
+      <div className="rounded-xl border border-amber-600/30 bg-surface p-5">
         <h3 className="text-sm font-semibold uppercase tracking-wide text-amber-900">
           Identity needs confirmation
         </h3>
-        <p className="mt-1 text-sm text-slate-700">
+        <p className="mt-1 text-sm text-ink/85">
           Multiple public identities may match this prospect. Select the person you want ProspectIQ
           to analyze.
         </p>
-        <p className="mt-1 text-xs text-slate-500">
+        <p className="mt-1 text-xs text-faint">
           Qualification and outreach have not started.
         </p>
 
         <ul className="mt-4 space-y-3">
           {verification.candidates.map((c) => (
-            <li key={c.id} className="rounded-lg border border-slate-200 p-3">
+            <li key={c.id} className="rounded-lg border border-hairline p-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-slate-900">{c.name ?? 'Unnamed'}</p>
-                  <p className="mt-0.5 text-sm text-slate-700">
+                  <p className="text-sm font-semibold text-ink">{c.name ?? 'Unnamed'}</p>
+                  <p className="mt-0.5 text-sm text-ink/85">
                     {c.role ?? 'Role unknown'}
                     {c.company ? ` · ${c.company}` : ''}
                   </p>
-                  {c.location ? <p className="text-xs text-slate-500">{c.location}</p> : null}
+                  {c.location ? <p className="text-xs text-faint">{c.location}</p> : null}
                   {c.headline ? (
-                    <p className="mt-1 text-xs italic text-slate-500">{c.headline}</p>
+                    <p className="mt-1 text-xs italic text-faint">{c.headline}</p>
                   ) : null}
 
                   {/* Secondary to name/role/company, but scannable side by side. */}
-                  <div className="mt-2 rounded bg-slate-50 px-2 py-1.5">
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                  <div className="mt-2 rounded bg-app px-2 py-1.5">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-faint">
                       Why this candidate?
                     </p>
-                    <p className="mt-0.5 text-xs leading-snug text-slate-700">
+                    <p className="mt-0.5 text-xs leading-snug text-ink/85">
                       {explainCandidate(c, verification.conflicts, verification.candidates)}
                     </p>
                   </div>
@@ -98,37 +98,37 @@ export function IdentityCard({
                       href={c.linkedin_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="mt-1 block break-all text-xs text-indigo-600 hover:underline"
+                      className="mt-1 block break-all text-xs text-accent hover:underline"
                     >
                       {c.linkedin_url}
                     </a>
                   ) : null}
                   {c.sources.length > 0 ? (
                     <details className="mt-1 text-[11px]">
-                      <summary className="cursor-pointer text-slate-500">
+                      <summary className="cursor-pointer text-faint">
                         Sources: {c.sources.length}
                       </summary>
                       <ul className="mt-0.5 space-y-0.5">
                         {c.sources.slice(0, 3).map((sourceUrl, i) => (
-                          <li key={i} className="truncate text-slate-400" title={sourceUrl}>
+                          <li key={i} className="truncate text-faint" title={sourceUrl}>
                             {sourceUrl}
                           </li>
                         ))}
                       </ul>
                     </details>
                   ) : (
-                    <p className="mt-1 text-[11px] text-slate-400">Sources: 0</p>
+                    <p className="mt-1 text-[11px] text-faint">Sources: 0</p>
                   )}
                 </div>
                 <div className="shrink-0 text-right">
-                  <p className="text-xs tabular-nums text-slate-500">{c.confidence}</p>
-                  <p className="text-[10px] uppercase tracking-wide text-slate-400">confidence</p>
+                  <p className="text-xs tabular-nums text-faint">{c.confidence}</p>
+                  <p className="text-[10px] uppercase tracking-wide text-faint">confidence</p>
                 </div>
               </div>
               <button
                 onClick={() => select(c.id)}
                 disabled={busy !== null}
-                className="mt-2 w-full rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                className="mt-2 w-full rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-hover disabled:opacity-50"
               >
                 {busy === c.id ? 'Confirming…' : 'Select this person'}
               </button>
@@ -146,21 +146,21 @@ export function IdentityCard({
     : null;
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
+    <div className="rounded-xl border border-hairline bg-surface p-5">
+      <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-faint">
         {verification.status === 'VERIFIED' ? 'Identity verified' : 'Identity verification'}
       </h3>
 
       {selected ? (
-        <div className="mb-3 rounded-lg bg-slate-50 px-3 py-2">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+        <div className="mb-3 rounded-lg bg-app px-3 py-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-faint">
             Selected identity
           </p>
-          <p className="mt-0.5 text-sm font-medium text-slate-900">{selected.name ?? 'Unnamed'}</p>
-          <p className="text-xs text-slate-600">
+          <p className="mt-0.5 text-sm font-medium text-ink">{selected.name ?? 'Unnamed'}</p>
+          <p className="text-xs text-muted">
             {[selected.role, selected.company].filter(Boolean).join(' · ') || 'Role and company unknown'}
           </p>
-          {selected.location ? <p className="text-xs text-slate-500">{selected.location}</p> : null}
+          {selected.location ? <p className="text-xs text-faint">{selected.location}</p> : null}
         </div>
       ) : null}
 
@@ -190,11 +190,11 @@ export function IdentityCard({
       </div>
 
       {verification.field_evidence ? (
-        <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+        <div className="mt-3 rounded-lg bg-app px-3 py-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-faint">
             Evidence checked
           </p>
-          <p className="mt-0.5 text-xs text-slate-700">{verification.field_evidence.summary}</p>
+          <p className="mt-0.5 text-xs text-ink/85">{verification.field_evidence.summary}</p>
           <ul className="mt-1.5 space-y-0.5">
             {verification.field_evidence.corroborated.map((f) => (
               <li key={f} className="text-[11px] text-emerald-700">
@@ -207,7 +207,7 @@ export function IdentityCard({
               </li>
             ))}
             {verification.field_evidence.unavailable.map((f) => (
-              <li key={f} className="text-[11px] text-slate-400">
+              <li key={f} className="text-[11px] text-faint">
                 <span aria-hidden="true">·</span> {f} — unavailable
               </li>
             ))}
@@ -237,7 +237,7 @@ export function IdentityCard({
       </dl>
 
       {verification.resolution === 'USER_CONFIRMED' ? (
-        <p className="mt-2 rounded bg-indigo-50 px-2 py-1.5 text-xs text-indigo-800">
+        <p className="mt-2 rounded bg-accent/8 px-2 py-1.5 text-xs text-accent">
           Identity confirmed by user — ProspectIQ used the selected identity for this run.
         </p>
       ) : null}
@@ -249,7 +249,7 @@ export function IdentityCard({
           </summary>
           <ul className="mt-1 space-y-1">
             {verification.conflicts.map((c, i) => (
-              <li key={i} className="text-slate-600">
+              <li key={i} className="text-muted">
                 <span className="font-medium">{c.field}:</span> profile says{' '}
                 {c.profile_value ?? 'unknown'}, sources say {c.public_value ?? 'unknown'}.{' '}
                 {c.explanation}
@@ -266,8 +266,8 @@ function Row({ label, value }: { label: string; value: string | null }) {
   if (!value) return null;
   return (
     <div className="flex gap-2">
-      <dt className="w-20 shrink-0 text-slate-500">{label}</dt>
-      <dd className="min-w-0 flex-1 text-slate-800">{value}</dd>
+      <dt className="w-20 shrink-0 text-faint">{label}</dt>
+      <dd className="min-w-0 flex-1 text-ink/90">{value}</dd>
     </div>
   );
 }

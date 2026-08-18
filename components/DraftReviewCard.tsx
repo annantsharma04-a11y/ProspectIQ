@@ -9,16 +9,16 @@ function humanize(text: string): string {
 }
 
 const VERDICT_STYLE: Record<string, string> = {
-  SUPPORTED: 'bg-green-100 text-green-700',
-  UNCERTAIN: 'bg-amber-100 text-amber-700',
-  UNSUPPORTED: 'bg-red-100 text-red-700',
-  ALLOWED: 'bg-sky-100 text-sky-700',
+  SUPPORTED: 'bg-emerald-600/10 text-emerald-700',
+  UNCERTAIN: 'bg-amber-600/10 text-amber-800',
+  UNSUPPORTED: 'bg-red-600/10 text-red-700',
+  ALLOWED: 'bg-accent/10 text-accent',
 };
 
 const VALIDATION_STYLE: Record<string, string> = {
-  pass: 'bg-green-100 text-green-700',
-  revised: 'bg-blue-100 text-blue-700',
-  flagged: 'bg-amber-100 text-amber-700',
+  pass: 'bg-emerald-600/10 text-emerald-700',
+  revised: 'bg-accent/10 text-accent',
+  flagged: 'bg-amber-600/10 text-amber-800',
 };
 
 /** Shown once a review action is recorded. Every outcome restates the same
@@ -115,21 +115,21 @@ export function DraftReviewCard({
   const claims = draft.claims ?? [];
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="rounded-xl border border-hairline bg-surface p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-slate-800">
+        <h3 className="text-sm font-semibold text-ink/90">
           {'Personalised draft'}
         </h3>
         <div className="flex items-center gap-2">
           {draft.confidence !== null && (
-            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+            <span className="rounded-full bg-ink/6 px-2 py-0.5 text-xs font-medium text-muted">
               confidence {draft.confidence}/100
             </span>
           )}
           {draft.validation_status && (
             <span
               className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                VALIDATION_STYLE[draft.validation_status] ?? 'bg-slate-100 text-slate-600'
+                VALIDATION_STYLE[draft.validation_status] ?? 'bg-ink/6 text-muted'
               }`}
             >
               {draft.validation_status}
@@ -138,7 +138,7 @@ export function DraftReviewCard({
           <button
             onClick={regenerate}
             disabled={regenerating || busy}
-            className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+            className="rounded-lg border border-hairline px-2.5 py-1 text-xs font-medium text-muted hover:bg-app disabled:opacity-50"
           >
             {regenerating ? 'Regenerating…' : 'Regenerate message'}
           </button>
@@ -146,18 +146,18 @@ export function DraftReviewCard({
       </div>
 
       {regenerating && (
-        <p className="mb-2 rounded-lg bg-indigo-50 px-2.5 py-1.5 text-xs text-indigo-800">
+        <p className="mb-2 rounded-lg bg-accent/8 px-2.5 py-1.5 text-xs text-accent">
           Writing a new version of this message — same evidence, new wording. This page updates
           automatically when it is ready.
         </p>
       )}
       {regenerateError && (
-        <p className="mb-2 rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-700">{regenerateError}</p>
+        <p className="mb-2 rounded-lg bg-red-600/8 px-2.5 py-1.5 text-xs text-red-700">{regenerateError}</p>
       )}
 
       {draft.subject && (
-        <p className="mb-2 text-sm text-slate-700">
-          <span className="font-medium text-slate-500">Subject:</span> {draft.subject}
+        <p className="mb-2 text-sm text-ink/85">
+          <span className="font-medium text-faint">Subject:</span> {draft.subject}
         </p>
       )}
 
@@ -166,20 +166,20 @@ export function DraftReviewCard({
           value={text}
           onChange={(e) => setText(e.target.value)}
           rows={9}
-          className="w-full rounded-lg border border-slate-300 p-3 text-sm focus:border-indigo-500 focus:outline-none"
+          className="w-full rounded-lg border border-hairline p-3 text-sm focus:border-accent focus:outline-none"
         />
       ) : (
-        <p className="whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-sm leading-relaxed text-slate-800">
+        <p className="whitespace-pre-wrap rounded-lg bg-app p-3 text-sm leading-relaxed text-ink/90">
           {reviewedText}
         </p>
       )}
 
       {draft.final_text && draft.final_text !== draft.message_text && (
         <details className="mt-2 text-xs">
-          <summary className="cursor-pointer text-slate-500">
+          <summary className="cursor-pointer text-faint">
             Claim validation revised this message — show the original
           </summary>
-          <p className="mt-1 whitespace-pre-wrap rounded bg-slate-50 p-2 text-slate-600">
+          <p className="mt-1 whitespace-pre-wrap rounded bg-app p-2 text-muted">
             {draft.message_text}
           </p>
         </details>
@@ -187,11 +187,11 @@ export function DraftReviewCard({
 
       {claims.length > 0 && (
         <div className="mt-3">
-          <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-slate-400">
+          <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-faint">
             Claim check
           </p>
           {claims.some((c) => c.verdict === 'UNCERTAIN') && (
-            <p className="mb-1.5 rounded bg-amber-50 px-2 py-1.5 text-[11px] leading-relaxed text-amber-800">
+            <p className="mb-1.5 rounded bg-amber-600/6 px-2 py-1.5 text-[11px] leading-relaxed text-amber-800">
               Some claims are marked uncertain: public search evidence was found, but the underlying
               page could not be fully retrieved, so they were not treated as fully corroborated.
               That is a confidence level, not an error.
@@ -202,20 +202,20 @@ export function DraftReviewCard({
               <li key={i} className="flex items-start gap-2 text-xs">
                 <span
                   className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 font-semibold ${
-                    VERDICT_STYLE[c.verdict] ?? 'bg-slate-100 text-slate-600'
+                    VERDICT_STYLE[c.verdict] ?? 'bg-ink/6 text-muted'
                   }`}
                 >
                   {c.verdict}
                 </span>
-                <span className="text-slate-600">
+                <span className="text-muted">
                   {c.claim}
-                  {c.explanation && <span className="text-slate-400"> — {humanize(c.explanation)}</span>}
+                  {c.explanation && <span className="text-faint"> — {humanize(c.explanation)}</span>}
                   {c.evidence_url && (
                     <a
                       href={c.evidence_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="ml-1 text-indigo-600 hover:underline"
+                      className="ml-1 text-accent hover:underline"
                     >
                       ↗
                     </a>
@@ -228,29 +228,29 @@ export function DraftReviewCard({
       )}
 
       {draft.sensitivity_note && (
-        <p className="mt-2 rounded bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+        <p className="mt-2 rounded bg-amber-600/6 px-2 py-1.5 text-xs text-amber-800">
           {draft.sensitivity_note}
         </p>
       )}
       {draft.validation_notes && (
         <details className="mt-2 text-xs">
-          <summary className="cursor-pointer text-slate-500">Validator notes</summary>
-          <p className="mt-1 whitespace-pre-wrap text-slate-600">{humanize(draft.validation_notes)}</p>
+          <summary className="cursor-pointer text-faint">Validator notes</summary>
+          <p className="mt-1 whitespace-pre-wrap text-muted">{humanize(draft.validation_notes)}</p>
         </details>
       )}
       {draft.reasoning && (
         <details className="mt-1.5 text-xs">
-          <summary className="cursor-pointer text-slate-500">Why it was written this way</summary>
-          <p className="mt-1 text-slate-600">{draft.reasoning}</p>
+          <summary className="cursor-pointer text-faint">Why it was written this way</summary>
+          <p className="mt-1 text-muted">{draft.reasoning}</p>
         </details>
       )}
 
       {(draft.information_requests?.length ?? 0) > 0 && (
-        <div className="mt-3 rounded-lg bg-slate-50 p-2.5">
-          <p className="text-xs font-medium text-slate-600">
+        <div className="mt-3 rounded-lg bg-app p-2.5">
+          <p className="text-xs font-medium text-muted">
             Information that would make this stronger:
           </p>
-          <ul className="mt-1 list-inside list-disc text-xs text-slate-500">
+          <ul className="mt-1 list-inside list-disc text-xs text-faint">
             {draft.information_requests!.map((r, i) => (
               <li key={i}>{r}</li>
             ))}
@@ -261,7 +261,7 @@ export function DraftReviewCard({
       {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
 
       {done ? (
-        <p className="mt-4 rounded-lg bg-slate-100 px-3 py-2 text-sm font-medium text-slate-700">
+        <p className="mt-4 rounded-lg bg-ink/6 px-3 py-2 text-sm font-medium text-ink/85">
           {DONE_MESSAGE[done] ?? DONE_MESSAGE.approved}
         </p>
       ) : (
@@ -271,7 +271,7 @@ export function DraftReviewCard({
               <button
                 onClick={() => review('edited')}
                 disabled={busy || regenerating}
-                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                className="rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-hover disabled:opacity-50"
               >
                 Save &amp; approve edit
               </button>
@@ -280,7 +280,7 @@ export function DraftReviewCard({
                   setEditing(false);
                   setText(reviewedText);
                 }}
-                className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700"
+                className="rounded-lg border border-hairline px-3 py-1.5 text-sm font-medium text-ink/85"
               >
                 Cancel
               </button>
@@ -290,21 +290,21 @@ export function DraftReviewCard({
               <button
                 onClick={() => review('approved')}
                 disabled={busy || regenerating}
-                className="rounded-lg bg-green-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
+                className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
               >
                 Approve
               </button>
               <button
                 onClick={() => setEditing(true)}
                 disabled={regenerating}
-                className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                className="rounded-lg border border-hairline px-3 py-1.5 text-sm font-medium text-ink/85 hover:bg-app disabled:opacity-50"
               >
                 Edit
               </button>
               <button
                 onClick={() => review('rejected')}
                 disabled={busy || regenerating}
-                className="rounded-lg border border-red-300 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+                className="rounded-lg border border-red-600/30 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-600/8 disabled:opacity-50"
               >
                 Reject
               </button>

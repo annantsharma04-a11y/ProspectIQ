@@ -64,10 +64,10 @@ export default async function StagePage({
   return (
     <div className="mx-auto max-w-3xl">
       <div className="mb-4 flex items-center justify-between gap-3">
-        <Link href={`/runs/${id}`} className="text-sm font-medium text-indigo-600 hover:underline">
+        <Link href={`/runs/${id}`} className="text-sm font-medium text-accent hover:underline">
           ← Back to run
         </Link>
-        <p className="truncate text-sm text-slate-500">
+        <p className="truncate text-sm text-faint">
           {run.prospect_name ?? run.input_name ?? `/in/${run.linkedin_slug}`}
           {run.company_name ? ` · ${run.company_name}` : ''}
         </p>
@@ -85,7 +85,7 @@ export default async function StagePage({
         {prev && ran.has(prev) ? (
           <Link
             href={`/runs/${id}/stages/${prev}`}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            className="rounded-lg border border-hairline px-3 py-2 text-sm font-medium text-muted hover:bg-app"
           >
             ← {STAGE_LABELS[prev]}
           </Link>
@@ -95,7 +95,7 @@ export default async function StagePage({
         {next && ran.has(next) ? (
           <Link
             href={`/runs/${id}/stages/${next}`}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            className="rounded-lg border border-hairline px-3 py-2 text-sm font-medium text-muted hover:bg-app"
           >
             {STAGE_LABELS[next]} →
           </Link>
