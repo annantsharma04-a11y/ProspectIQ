@@ -9,7 +9,7 @@ import type { CompanyFit, EvidenceItem, ProspectFit, TargetQualification } from 
 
 const ev = (url: string): EvidenceItem => ({ url, quote: 'A verified excerpt.' });
 
-const prospectFit = (): ProspectFit =>
+const prospectFit = (over: Partial<ProspectFit> = {}): ProspectFit =>
   ({
     score: 80,
     classification: 'HIGH',
@@ -23,26 +23,38 @@ const prospectFit = (): ProspectFit =>
     missing_information: [],
     evidence_basis: 'OBSERVED',
     evidence: [ev('https://example.com/prospect')],
+    ...over,
   }) as ProspectFit;
 
-const companyFit = (): CompanyFit =>
+const companyFit = (over: Partial<CompanyFit> = {}): CompanyFit =>
   ({
     score: 78,
     classification: 'HIGH',
     industry: 'Logistics',
     company_size: '1,000+',
     relevant_workflows: ['accounts payable'],
-    capability_matches: [],
+    capability_matches: [
+      {
+        capability_id: 'ap_automation',
+        capability_name: 'Accounts payable automation',
+        company_signal: 'Multi-entity vendor payment volume observed.',
+        fit_strength: 80,
+        evidence: [ev('https://example.com/report')],
+        basis: 'OBSERVED',
+        reason: 'Multi-entity operations imply meaningful invoice volume.',
+      },
+    ],
     fit_reasons: [{ reason: 'Multi-entity vendor payment volume observed.', basis: 'OBSERVED', evidence: [ev('https://example.com/report')] }],
     missing_information: [],
     evidence_basis: 'OBSERVED',
     evidence_adjustment: null,
+    ...over,
   }) as CompanyFit;
 
-const qualification = (): TargetQualification =>
+const qualification = (over: { prospect_fit?: ProspectFit; company_fit?: CompanyFit } = {}): TargetQualification =>
   ({
-    prospect_fit: prospectFit(),
-    company_fit: companyFit(),
+    prospect_fit: over.prospect_fit ?? prospectFit(),
+    company_fit: over.company_fit ?? companyFit(),
     overall_fit: 78,
     classification: 'QUALIFIED',
     reason: 'Strong evidenced fit.',
@@ -176,14 +188,70 @@ describe('buildOutreachRationale', () => {
     expect(buildOutreachRationale(snapshot({ run: run({ qualification: null }) }))).toBeNull();
   });
 
-  it('surfaces account fit and contact fit exactly as qualification recorded them', () => {
+  it('renders account fit and contact fit as compact one-sentence synthesis, not the qualification paragraph', () => {
     const r = buildOutreachRationale(snapshot())!;
-    expect(r.accountFit.classification).toBe('HIGH');
-    expect(r.accountFit.score).toBe(78);
-    expect(r.accountFit.reason).toBe('Multi-entity vendor payment volume observed.');
-    expect(r.contactFit.classification).toBe('HIGH');
-    expect(r.contactFit.score).toBe(80);
-    expect(r.contactFit.reason).toBe('Owns AP and reconciliation.');
+    expect(r.accountFit).toBe('Strong account fit — a verified accounts payable automation need.');
+    expect(r.contactFit).toBe('Strong contact fit — VP Finance with decision authority over the qualified workflow.');
+
+    // Never the full qualification reasoning verbatim — that stays in Target Qualification.
+    expect(r.accountFit).not.toContain('Multi-entity vendor payment volume observed.');
+    expect(r.contactFit).not.toContain('Owns AP and reconciliation.');
+
+    // Never a repeated score — Target Qualification already shows it.
+    expect(r.accountFit).not.toMatch(/\b78\b/);
+    expect(r.contactFit).not.toMatch(/\b80\b/);
+  });
+
+  it('account fit falls back to the top relevant workflow when no capability was verified', () => {
+    const r = buildOutreachRationale(
+      snapshot({
+        run: run({
+          qualification: qualification({
+            company_fit: companyFit({ capability_matches: [], relevant_workflows: ['vendor invoicing'] }),
+          }),
+        }),
+      }),
+    )!;
+    expect(r.accountFit).toBe('Strong account fit, based on vendor invoicing.');
+  });
+
+  it('account fit falls back to just the classification when nothing else is available', () => {
+    const r = buildOutreachRationale(
+      snapshot({
+        run: run({
+          qualification: qualification({
+            company_fit: companyFit({ capability_matches: [], relevant_workflows: [] }),
+          }),
+        }),
+      }),
+    )!;
+    expect(r.accountFit).toBe('Strong account fit.');
+  });
+
+  it('contact fit omits the decision-authority clause when authority is not HIGH', () => {
+    const r = buildOutreachRationale(
+      snapshot({
+        run: run({
+          qualification: qualification({
+            prospect_fit: prospectFit({ decision_authority: 'MEDIUM' }),
+          }),
+        }),
+      }),
+    )!;
+    expect(r.contactFit).toBe('Strong contact fit — VP Finance.');
+  });
+
+  it('contact fit falls back to a generic label when no role is known', () => {
+    const r = buildOutreachRationale(
+      snapshot({
+        run: run({
+          qualification: qualification({
+            prospect_fit: prospectFit({ role: null, decision_authority: 'LOW' }),
+          }),
+        }),
+      }),
+    )!;
+    expect(r.contactFit).toBe('Strong contact fit — this contact.');
   });
 
   it('surfaces the primary verified signal from the selected-hook signal row', () => {
@@ -207,7 +275,16 @@ describe('buildOutreachRationale', () => {
           generateMessageStage({
             approved_solution: {
               name: 'AP Automation Suite',
-              why_it_fits: 'AP Automation Suite addresses the observed vendor-payment workflow.',
+              description: 'Automates invoice capture, matching and vendor payments.',
+              supported_workflows: ['Invoice processing', 'Payables reconciliation', 'Vendor payments'],
+              matched_capabilities: [
+                {
+                  capability_name: 'Accounts payable automation',
+                  fit_strength: 85,
+                  evidence: [{ url: 'https://example.com/report', quote: 'A verified excerpt.' }],
+                },
+              ],
+              why_it_fits: 'stale, no longer used for display — see solutionFitSentence()',
             },
             solution_match_note: null,
           }),
@@ -215,7 +292,35 @@ describe('buildOutreachRationale', () => {
       }),
     )!;
     expect(r.solutionName).toBe('AP Automation Suite');
-    expect(r.whyItFits).toBe('AP Automation Suite addresses the observed vendor-payment workflow.');
+    // Built from the solution's own catalog description + the company, never
+    // the raw capability description or the stale persisted why_it_fits text.
+    expect(r.whyItFits).toBe('Automates invoice capture, matching and vendor payments, a verified need at Acme Logistics.');
+    expect(r.solutionEvidence).toEqual({
+      capabilityName: 'Accounts payable automation',
+      fitStrength: 85,
+      sourceUrl: 'https://example.com/report',
+    });
+    expect(r.useInOutreach).toBe('Invoice processing, Payables reconciliation, Vendor payments');
+  });
+
+  it('degrades gracefully when matched_capabilities/supported_workflows are absent (older persisted runs)', () => {
+    const r = buildOutreachRationale(
+      snapshot({
+        stages: [
+          generateMessageStage({
+            approved_solution: {
+              name: 'AP Automation Suite',
+              description: 'Automates invoice capture, matching and vendor payments.',
+              why_it_fits: 'stale',
+            },
+            solution_match_note: null,
+          }),
+        ],
+      }),
+    )!;
+    expect(r.solutionName).toBe('AP Automation Suite');
+    expect(r.solutionEvidence).toBeNull();
+    expect(r.useInOutreach).toBeNull();
   });
 
   it('falls back to "no match" wording when generate_message recorded none', () => {

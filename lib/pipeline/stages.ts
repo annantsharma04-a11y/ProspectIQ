@@ -2068,6 +2068,7 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
               id: solutionMatch.solution.id,
               name: solutionMatch.solution.name,
               description: solutionMatch.solution.description,
+              supported_workflows: solutionMatch.solution.supported_workflows,
               target_functions: solutionMatch.solution.target_functions,
               use_cases: solutionMatch.solution.use_cases,
               non_use_cases: solutionMatch.solution.non_use_cases,

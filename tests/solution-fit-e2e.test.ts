@@ -533,10 +533,26 @@ describe('Solution Fit — one real end-to-end case', () => {
       contactCandidates: [],
     })!;
 
-    expect(rationale.accountFit.classification).toBe('HIGH');
-    expect(rationale.contactFit.classification).toBe('HIGH');
+    // Compact one-sentence synthesis — never the qualification score or its
+    // full reasoning paragraph, which stay in Target Qualification.
+    expect(rationale.accountFit).toBe('Strong account fit — a verified accounts payable automation need.');
+    expect(rationale.contactFit).toBe('Strong contact fit — VP Finance Operations with decision authority over the qualified workflow.');
     expect(rationale.primarySignal?.signal).toContain('consolidating vendor invoicing');
+
+    // Recommended Solution — the primary element: name, a concise catalog-
+    // grounded fit sentence (no capability description dump), the single
+    // verified evidence item, and what the message should lead with.
     expect(rationale.solutionName).toBe('Accounts payable automation');
-    expect(rationale.whyItFits).toContain('Bluewave Freight is consolidating vendor invoicing');
+    expect(rationale.whyItFits).toBe(
+      'AI digital-employee agents that process invoices, match and reconcile payables, and execute AP workflows end to end, a verified need at Bluewave Freight.',
+    );
+    expect(rationale.solutionEvidence).toEqual({
+      capabilityName: 'Accounts payable automation',
+      fitStrength: 82,
+      sourceUrl: 'https://example.com/bluewave-vendor-ops',
+    });
+    expect(rationale.useInOutreach).toBe(
+      'Invoice processing, Payables matching and reconciliation, End-to-end AP workflow execution',
+    );
   });
 });
