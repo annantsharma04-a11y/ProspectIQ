@@ -6,6 +6,8 @@ import Link from 'next/link';
 import { DraftReviewCard } from './DraftReviewCard';
 import { IdentityCard } from './IdentityCard';
 import { ContactCandidates } from './ContactCandidates';
+import { DecisionSummary } from './DecisionSummary';
+import { OutreachRationale } from './OutreachRationale';
 import { StatusBadge, type StatusTone } from './StatusBadge';
 import type { RunSnapshot } from '@/lib/types';
 import { deriveOutreachStatus, OUTREACH_LABEL } from '@/lib/qualification/outreach-status';
@@ -376,6 +378,9 @@ export function ResultPanel({
 
   return (
     <section className="space-y-4">
+      {/* Decision summary — the TL;DR, before anything else on the page */}
+      <DecisionSummary run={run} />
+
       {/* Prospect summary */}
       <div className="rounded-xl border border-hairline bg-surface p-5">
         <div className="flex items-start justify-between gap-3">
@@ -590,13 +595,18 @@ export function ResultPanel({
 
       {/* Draft + human review */}
       {draft ? (
-        // Keyed on the draft's own id: a regenerated draft is a delete+insert
-        // (the same pattern generate_message always used), so a genuinely new
-        // draft arrives with a new id — remounting on that id is what makes a
-        // freshly regenerated message replace stale local component state
-        // (the in-progress edit text, the approve/reject outcome) instead of
-        // leaving the old draft's state visible under the new draft's data.
-        <DraftReviewCard key={draft.id} runId={run.id} run={run} draft={draft} onReviewed={onChange} />
+        <>
+          {/* Outreach rationale — why this account, this contact, this signal,
+              this solution — shown directly above the message it explains. */}
+          <OutreachRationale snapshot={snapshot} />
+          {/* Keyed on the draft's own id: a regenerated draft is a delete+insert
+              (the same pattern generate_message always used), so a genuinely new
+              draft arrives with a new id — remounting on that id is what makes a
+              freshly regenerated message replace stale local component state
+              (the in-progress edit text, the approve/reject outcome) instead of
+              leaving the old draft's state visible under the new draft's data. */}
+          <DraftReviewCard key={draft.id} runId={run.id} run={run} draft={draft} onReviewed={onChange} />
+        </>
       ) : inProgress ? (
         <p className="rounded-xl border border-dashed border-hairline p-4 text-sm text-muted">
           No draft yet — the pipeline is still running.

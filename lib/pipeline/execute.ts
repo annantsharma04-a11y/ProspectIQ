@@ -381,6 +381,52 @@ async function rehydrate(runId: string): Promise<PipelineContext> {
 }
 
 /**
+ * Reconcile `ctx.identity`'s resolved/ambiguous status with the run's OWN
+ * persisted identity verification, for the message-only regenerate path only.
+ *
+ * `rehydrate()` sets `ctx.identity` by calling `resolveIdentity()` on nothing
+ * but the stored LinkedIn profile and typed hints (see above). That function
+ * has no way to know a run without either was still settled — VERIFIED — by
+ * the full identity-verification subsystem (public-web corroboration,
+ * `verifyIdentityStage`), whose result is what actually decided this run was
+ * fit for review in the first place. Left alone, a hint-free, profile-less
+ * run's fresh `resolveIdentity()` guess reports `resolved: false`, and
+ * `readyForReviewStage`'s `needsManual` check reads exactly that field —
+ * incorrectly sending an already-VERIFIED run back to manual review on every
+ * regenerate, even though nothing about who this person is has changed.
+ *
+ * This is intentionally narrow: only `resolved`/`ambiguous` (and the identity
+ * fields already carried on `IdentityVerification.resolved`) are reconciled,
+ * and only for this one call path. It does not touch how identity is
+ * established in the first place — `verifyIdentityStage`, `resolveIdentity()`,
+ * and every other reader of `ctx.identity` are untouched.
+ */
+function reconcileIdentityForRegeneration(ctx: PipelineContext): void {
+  const verification = ctx.identityVerification;
+  if (!verification || !ctx.identity) return;
+
+  if (verification.status === 'VERIFIED' || verification.status === 'PARTIAL') {
+    ctx.identity = {
+      ...ctx.identity,
+      resolved: true,
+      ambiguous: false,
+      full_name: verification.resolved.name ?? ctx.identity.full_name,
+      role: verification.resolved.role ?? ctx.identity.role,
+      company: verification.resolved.company ?? ctx.identity.company,
+      location: verification.resolved.location ?? ctx.identity.location,
+      confidence: verification.confidence,
+    };
+  } else if (verification.status === 'AMBIGUOUS') {
+    // Still genuinely unresolved — a human never confirmed who this is (or
+    // this reconciliation would not be looking at an AMBIGUOUS record at
+    // all), so regeneration must keep sending it to manual review.
+    ctx.identity = { ...ctx.identity, ambiguous: true };
+  } else if (verification.status === 'FAILED') {
+    ctx.identity = { ...ctx.identity, resolved: false };
+  }
+}
+
+/**
  * `rehydrate()` plus the ALREADY-SELECTED hook — for a message-only
  * regenerate, which must not re-derive it from a fresh model pass the way
  * `retryAnalysis()`'s `evaluateSignalsStage()` would.
@@ -397,6 +443,7 @@ async function rehydrate(runId: string): Promise<PipelineContext> {
  */
 async function rehydrateForMessageRegeneration(runId: string): Promise<PipelineContext> {
   const ctx = await rehydrate(runId);
+  reconcileIdentityForRegeneration(ctx);
 
   const hookStage = await getStage(runId, 'select_hook');
   const hookOutput = hookStage?.output as Record<string, unknown> | null;

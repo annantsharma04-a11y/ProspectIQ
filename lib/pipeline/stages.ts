@@ -63,6 +63,8 @@ import {
 import { discoverContacts } from '@/lib/contacts/discover';
 import { rankCandidates } from '@/lib/contacts/rank';
 import { createContactCandidates } from '@/lib/supabase/queries';
+import { matchApprovedSolution, solutionForPrompt } from '@/lib/solutions/match';
+import { NO_SOLUTION_MATCH_MESSAGE } from '@/lib/solutions/types';
 import { StageAbort, type PipelineContext } from './context';
 import type { SignalRow, SourceRow, StageName, StageStatus } from '@/lib/types';
 
@@ -1108,6 +1110,16 @@ export function capabilityContext(ctx: PipelineContext) {
   return { observed, inferred, observedIds: new Set(observed.map((c) => c.id)) };
 }
 
+/**
+ * The approved Zamp solution for this run, matched deterministically in code
+ * from the same OBSERVED, evidenced capabilities `capabilityContext()` treats
+ * as established — see lib/solutions/match.ts. Null when no verified
+ * capability maps onto the catalog; the model is never asked to guess one.
+ */
+export function solutionContext(ctx: PipelineContext) {
+  return matchApprovedSolution(ctx.qualification);
+}
+
 /** True when qualification says we may proceed to hooks and outreach. */
 export function isQualified(ctx: PipelineContext): boolean {
   return ctx.qualification?.proceed === true;
@@ -1251,6 +1263,7 @@ export async function evaluateSignalsStage(ctx: PipelineContext): Promise<void> 
         senderName: sender.name,
         senderCompany: sender.company,
         capabilityContext: capabilityContext(ctx),
+        approvedSolution: solutionContext(ctx) ? solutionForPrompt(solutionContext(ctx)!) : undefined,
       });
     } catch (err) {
       if (err instanceof LLMError) {
@@ -1931,6 +1944,10 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
     }
 
     const sender = senderFor(ctx);
+    // Matched once, deterministically, from this run's verified capabilities —
+    // recorded here so the UI can show the same recommendation the model was
+    // (or was not) given, never a claim invented after the fact.
+    const solutionMatch = solutionContext(ctx);
     const messageText = applySenderIdentity(analysis.suggestedMessage ?? '', sender.name);
     if (!messageText) {
       return {
@@ -2046,6 +2063,19 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
         },
         declared_claims: analysis.messageClaims,
         information_requests: analysis.informationRequests,
+        approved_solution: solutionMatch
+          ? {
+              id: solutionMatch.solution.id,
+              name: solutionMatch.solution.name,
+              description: solutionMatch.solution.description,
+              target_functions: solutionMatch.solution.target_functions,
+              use_cases: solutionMatch.solution.use_cases,
+              non_use_cases: solutionMatch.solution.non_use_cases,
+              matched_capabilities: solutionMatch.matched_capabilities,
+              why_it_fits: solutionMatch.why_it_fits,
+            }
+          : null,
+        solution_match_note: solutionMatch ? null : NO_SOLUTION_MATCH_MESSAGE,
       },
       value: undefined,
     };
@@ -2083,6 +2113,7 @@ export async function regenerateMessage(
       senderName: sender.name,
       senderCompany: sender.company,
       capabilityContext: capabilityContext(ctx),
+      approvedSolution: solutionContext(ctx) ? solutionForPrompt(solutionContext(ctx)!) : undefined,
       rewriteDirective:
         `${directive} ` +
         `The message must remain unmistakably about THIS prospect and rest on this verified observation: "${ctx.hook.signal}". ` +

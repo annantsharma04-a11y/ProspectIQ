@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { RunRow, DraftRow, RunStageRow, SourceRow } from '@/lib/types';
+import type { IdentityVerification } from '@/lib/identity/types';
 
 // regenerateMessageOnly() end-to-end, fully mocked at the two real boundaries
 // (Supabase and the model) — no network, no cost, fully repeatable. Exercises
@@ -306,5 +307,239 @@ describe('regenerateMessageOnly — failure and precondition handling', () => {
 
     expect(mockCallStructured).not.toHaveBeenCalled();
     expect(mockCreateDraft).not.toHaveBeenCalled();
+  });
+});
+
+// ─── identity is not re-litigated on a message-only regenerate ──────────────
+//
+// The live smoke test found: a run with a genuinely VERIFIED, high-confidence
+// identity — established through the full identity-verification subsystem,
+// via public-web corroboration, with no direct LinkedIn profile and no typed
+// hints — was demoted to `needs_manual_review` after Regenerate Message, even
+// though the regenerated message and its solution match were both correct.
+//
+// Root cause: `rehydrate()` rebuilds `ctx.identity` from nothing but the
+// stored profile and typed hints via `resolveIdentity()`, which has no way to
+// see the run's own persisted `identity_verification`. A profile-less,
+// hint-less run reports `resolved: false` regardless of what verification
+// actually concluded, and `readyForReviewStage` reads exactly that field.
+//
+// Fix: `rehydrateForMessageRegeneration()` now reconciles `ctx.identity`
+// against `ctx.identityVerification` (`reconcileIdentityForRegeneration()` in
+// lib/pipeline/execute.ts) before anything downstream runs.
+
+const identityVerification = (over: Partial<IdentityVerification> = {}): IdentityVerification =>
+  ({
+    status: 'VERIFIED',
+    confidence: 92,
+    resolution: 'AUTOMATIC',
+    resolved: {
+      name: 'Priya Raman',
+      role: 'VP Finance Operations',
+      company: 'Bluewave Freight',
+      location: null,
+      linkedin_url: null,
+    },
+    candidates: [],
+    conflicts: [],
+    missing_fields: [],
+    reason: 'Corroborated across multiple independent public sources.',
+    proceed: true,
+    selected_candidate_id: null,
+    ...over,
+  }) as IdentityVerification;
+
+// A message crafted to clear every real, unmodified quality gate — see
+// tests/solution-fit-e2e.test.ts, where this exact pairing was verified
+// against checkPersonalization/checkOpener/checkVoice directly.
+const VERIFIED_HOOK_SIGNAL = 'Bluewave Freight is consolidating vendor invoicing across three regional entities this quarter.';
+const CLEAN_MESSAGE =
+  "Priya, saw Bluewave pulling its regional vendor invoicing into one workflow this quarter. " +
+  "Consolidations like that usually mean someone has to standardize invoice matching and reconciliation " +
+  "across the merged entities before it settles into a routine process. We build AI agents that handle " +
+  "accounts payable automation, invoice processing and payables matching for finance teams doing exactly " +
+  "that. Worth comparing notes on how the transition is going?";
+
+const verifiedRunSelectHookStage = (): RunStageRow =>
+  ({
+    ...selectHookStage(),
+    output: {
+      selected: {
+        signal: VERIFIED_HOOK_SIGNAL,
+        why_it_matters: 'Consolidation projects like this typically drive AP process changes.',
+        signal_level: 'COMPANY',
+        role_relevance: 'As VP Finance Operations, Priya now owns the consolidated AP workflow across entities.',
+        outreach_rationale: 'The consolidation is actively underway, a timely, concrete reason to reach out.',
+        source_url: HOOK_SOURCE_URL,
+        source_title: 'Bluewave Freight AP Consolidation Update',
+        supporting_quote: VERIFIED_HOOK_SIGNAL,
+        evidence_level: 'FULL',
+        published_date: '2026-08-01',
+        composite_score: 84,
+      },
+      confidence: 80,
+    },
+  }) as RunStageRow;
+
+function cleanModelResponse(overrides: Record<string, unknown> = {}) {
+  return {
+    data: {
+      prospect: {
+        name: null, headline: null, currentCompany: null, currentRole: null, location: null,
+        identityConfidence: 0, identityNotes: null, ambiguous: false, employerChangeNote: null,
+      },
+      summary: '', careerInsights: [], companyContext: [], personalizationHooks: [],
+      painPointsOrInterests: [], selectedHookIndex: 0, hookReason: '', alternativesConsidered: [],
+      insufficientEvidence: false, insufficientReason: null,
+      outreachAngle: 'The active vendor-invoicing consolidation across regional entities.',
+      suggestedSubject: 'Bluewave AP consolidation',
+      suggestedMessage: CLEAN_MESSAGE,
+      messageClaims: [
+        {
+          claim: VERIFIED_HOOK_SIGNAL,
+          type: 'COMPANY_FACT',
+          verdict: 'SUPPORTED',
+          evidence_url: HOOK_SOURCE_URL,
+          explanation: 'Matches the retrieved source content verbatim.',
+        },
+      ],
+      confidence: 80,
+      informationRequests: [],
+      ...overrides,
+    },
+    meta: { model: 'test', used_fallback_model: false, purpose: 'analyze_prospect', duration_ms: 1, attempts: 1, total_tokens: null },
+  };
+}
+
+describe('regenerateMessageOnly — identity is reused, not re-litigated', () => {
+  it('a VERIFIED, profile-less, hint-less run stays ready_for_review after a clean regeneration', async () => {
+    mockGetRun.mockResolvedValue(
+      run({
+        // The exact conditions that fooled a fresh resolveIdentity() call:
+        // no direct profile, no typed hints — identity was established
+        // entirely through the identity-verification subsystem instead.
+        linkedin_profile: null,
+        input_name: null,
+        input_company: null,
+        input_title: null,
+        identity_verification: identityVerification(),
+        selected_hook: VERIFIED_HOOK_SIGNAL,
+      }),
+    );
+    mockGetStage.mockImplementation((_runId: string, name: string) => {
+      if (name === 'select_hook') return Promise.resolve(verifiedRunSelectHookStage());
+      if (name === 'generate_message') return Promise.resolve(generateMessageStageRow());
+      return Promise.resolve(null);
+    });
+    mockGetDraft.mockResolvedValue(draft({ message_text: 'OLD DRAFT TEXT' }));
+    mockListSources.mockResolvedValue([
+      source({ content: 'Bluewave Freight is consolidating vendor invoicing across three regional entities this quarter.' }),
+    ]);
+    mockCallStructured.mockResolvedValue(cleanModelResponse());
+
+    await regenerateMessageOnly(RUN_ID);
+
+    // The clean message cleared every gate on the first attempt — no forced
+    // internal retry, so the identity fix is what's under test here, not a
+    // lucky pass on a second try.
+    expect(mockCallStructured).toHaveBeenCalledTimes(1);
+
+    const statuses = mockUpdateRun.mock.calls.map((c) => c[1]);
+    const final = statuses[statuses.length - 1];
+    expect(final.status).toBe('ready_for_review');
+    expect(final.error).toBeNull();
+  });
+
+  it('a genuinely AMBIGUOUS identity still results in manual review, even with a clean regeneration', async () => {
+    mockGetRun.mockResolvedValue(
+      run({
+        linkedin_profile: null,
+        input_name: null,
+        input_company: null,
+        input_title: null,
+        identity_verification: identityVerification({
+          status: 'AMBIGUOUS',
+          proceed: false,
+          reason: 'Multiple plausible candidates; a human never confirmed which one this is.',
+        }),
+        selected_hook: VERIFIED_HOOK_SIGNAL,
+      }),
+    );
+    mockGetStage.mockImplementation((_runId: string, name: string) => {
+      if (name === 'select_hook') return Promise.resolve(verifiedRunSelectHookStage());
+      if (name === 'generate_message') return Promise.resolve(generateMessageStageRow());
+      return Promise.resolve(null);
+    });
+    mockGetDraft.mockResolvedValue(draft({ message_text: 'OLD DRAFT TEXT' }));
+    mockListSources.mockResolvedValue([
+      source({ content: 'Bluewave Freight is consolidating vendor invoicing across three regional entities this quarter.' }),
+    ]);
+    mockCallStructured.mockResolvedValue(cleanModelResponse());
+
+    await regenerateMessageOnly(RUN_ID);
+
+    const statuses = mockUpdateRun.mock.calls.map((c) => c[1]);
+    const final = statuses[statuses.length - 1];
+    expect(final.status).toBe('needs_manual_review');
+  });
+
+  it('a FAILED identity verification still results in manual review', async () => {
+    mockGetRun.mockResolvedValue(
+      run({
+        linkedin_profile: null,
+        input_name: null,
+        input_company: null,
+        input_title: null,
+        identity_verification: identityVerification({
+          status: 'FAILED',
+          proceed: false,
+          reason: 'No corroborating evidence could be found for this person.',
+        }),
+        selected_hook: VERIFIED_HOOK_SIGNAL,
+      }),
+    );
+    mockGetStage.mockImplementation((_runId: string, name: string) => {
+      if (name === 'select_hook') return Promise.resolve(verifiedRunSelectHookStage());
+      if (name === 'generate_message') return Promise.resolve(generateMessageStageRow());
+      return Promise.resolve(null);
+    });
+    mockGetDraft.mockResolvedValue(draft({ message_text: 'OLD DRAFT TEXT' }));
+    mockListSources.mockResolvedValue([
+      source({ content: 'Bluewave Freight is consolidating vendor invoicing across three regional entities this quarter.' }),
+    ]);
+    mockCallStructured.mockResolvedValue(cleanModelResponse());
+
+    await regenerateMessageOnly(RUN_ID);
+
+    const statuses = mockUpdateRun.mock.calls.map((c) => c[1]);
+    const final = statuses[statuses.length - 1];
+    expect(final.status).toBe('needs_manual_review');
+  });
+
+  it('with no persisted identity_verification at all, behavior is unchanged (pre-existing runs)', async () => {
+    // `identity_verification: null` is exactly the default `run()` fixture
+    // used throughout this file — reconciliation must no-op, not throw.
+    mockGetRun.mockResolvedValue(
+      run({
+        linkedin_profile: null,
+        input_name: null,
+        input_company: null,
+        input_title: null,
+        identity_verification: null,
+        selected_hook: VERIFIED_HOOK_SIGNAL,
+      }),
+    );
+    mockGetStage.mockImplementation((_runId: string, name: string) => {
+      if (name === 'select_hook') return Promise.resolve(verifiedRunSelectHookStage());
+      if (name === 'generate_message') return Promise.resolve(generateMessageStageRow());
+      return Promise.resolve(null);
+    });
+    mockGetDraft.mockResolvedValue(draft({ message_text: 'OLD DRAFT TEXT' }));
+    mockListSources.mockResolvedValue([
+      source({ content: 'Bluewave Freight is consolidating vendor invoicing across three regional entities this quarter.' }),
+    ]);
+    mockCallStructured.mockResolvedValue(cleanModelResponse());
+
+    await expect(regenerateMessageOnly(RUN_ID)).resolves.not.toThrow();
   });
 });

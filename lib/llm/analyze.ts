@@ -215,6 +215,13 @@ Bad:  "Your recent expansion into AI infrastructure is both impressive and
 Keep the sender description to one short sentence: "we help teams handle X".
 Not a pitch. No invented customers, results or credibility.
 
+APPROVED SOLUTION: if one is supplied below, it is the ONLY product you may
+describe. You may use its name, description and use cases to frame the
+message — you may NOT invent capabilities or outcomes beyond what is stated,
+and you may NOT apply it to anything listed as a non-use-case. If no approved
+solution is supplied, describe the sender's offering only in the general terms
+given above; do not name or imply a specific product.
+
 Do not fake humanity. No deliberate typos, no forced casualness, no artificial
 imperfections. Plain, careful writing already reads as human.
 
@@ -386,6 +393,24 @@ export interface QualifiedCapabilityContext {
   inferred: { id: string; name: string }[];
 }
 
+/**
+ * The single approved product the model may reference by name, matched
+ * deterministically in code (lib/solutions/match.ts) from the company's
+ * VERIFIED capabilities before this call is ever made. The model may use
+ * this to frame the message — it may not add capabilities, outcomes or use
+ * cases beyond what is stated here, and may not apply it to a listed
+ * non-use-case.
+ */
+export interface ApprovedSolutionContext {
+  id: string;
+  name: string;
+  description: string;
+  target_functions: string[];
+  use_cases: string[];
+  non_use_cases: string[];
+  matched_on: string[];
+}
+
 export interface AnalyzeInput {
   /** Direct profile data, when the LinkedIn provider returned it. */
   profile: LinkedInProfile | null;
@@ -401,6 +426,8 @@ export interface AnalyzeInput {
   senderCompany: string;
   /** What actually qualified this company, and what was only inferred. */
   capabilityContext?: QualifiedCapabilityContext;
+  /** The approved solution matched to this company's verified capabilities, if any. */
+  approvedSolution?: ApprovedSolutionContext;
   /** Set only when regenerating a draft that failed the personalisation gate. */
   rewriteDirective?: string;
 }
@@ -459,6 +486,17 @@ ${
         .join('\n')}`
     : ''
 }
+
+`
+      : ''
+  }${
+    input.approvedSolution
+      ? `APPROVED SOLUTION — the only product you may describe
+${input.approvedSolution.name}: ${input.approvedSolution.description}
+Target functions: ${input.approvedSolution.target_functions.join(', ') || '(none listed)'}
+Use cases: ${input.approvedSolution.use_cases.join('; ') || '(none listed)'}
+Do NOT use for: ${input.approvedSolution.non_use_cases.join('; ') || '(none listed)'}
+Matched because this company was verified to have: ${input.approvedSolution.matched_on.join(', ')}
 
 `
       : ''
