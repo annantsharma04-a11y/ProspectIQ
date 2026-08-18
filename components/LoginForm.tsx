@@ -4,8 +4,10 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createBrowserSupabase } from '@/lib/supabase/client';
 
+// Underline-only field: no box, no fill — a hairline bottom border that turns
+// accent-colored on focus. Presentation only; every prop below is unchanged.
 const FIELD =
-  'mt-1 w-full rounded-lg border border-hairline bg-surface px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent';
+  'mt-3 block w-full border-0 border-b border-hairline bg-transparent px-0 pb-2.5 text-sm text-ink focus:border-accent focus:outline-none focus:ring-0';
 
 /**
  * Email + password sign-in against Supabase Auth.
@@ -53,7 +55,7 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
   }
 
   return (
-    <form onSubmit={submit} className="space-y-4 rounded-xl border border-hairline bg-surface p-5">
+    <form onSubmit={submit} className="space-y-6">
       <div>
         <label htmlFor="email" className="block text-sm font-medium text-ink">Email</label>
         <input
@@ -86,7 +88,7 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
       <button
         type="submit"
         disabled={busy}
-        className="w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-accent-hover disabled:opacity-50"
+        className="w-full rounded-lg bg-ink px-4 py-3 text-sm font-semibold text-white transition hover:bg-ink/90 disabled:opacity-50"
       >
         {busy ? 'Working…' : mode === 'signin' ? 'Sign in' : 'Create account'}
       </button>
@@ -94,10 +96,15 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
       <button
         type="button"
         onClick={() => { setMode(mode === 'signin' ? 'signup' : 'signin'); setError(null); setNotice(null); }}
-        className="w-full text-xs text-faint hover:text-accent"
+        className="w-full text-center text-sm text-muted hover:text-accent"
       >
         {mode === 'signin' ? 'Need an account? Create one' : 'Already have an account? Sign in'}
       </button>
+
+      <p className="pt-4 text-xs leading-relaxed text-faint">
+        Public profile data is retrieved through a compliant provider. Nothing is accessed behind
+        a login, and outreach is always sent manually.
+      </p>
     </form>
   );
 }
