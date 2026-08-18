@@ -50,8 +50,14 @@ const W_SOURCE_CREDIBILITY = 25;
 const W_QUOTE_LENGTH = 10; // a longer verified quote is harder to have faked context for
 const W_RECENCY = 5;
 
-/** Loose match: "VP Finance" should match a source's "Vice President of Finance". */
-function roleMatches(proposedRole: string, targetRoles: string[]): boolean {
+/**
+ * Loose match: "VP Finance" should match a source's "Vice President of Finance".
+ *
+ * Exported so lib/contacts/preverify.ts applies the SAME role gate rather than
+ * writing a second, subtly different one — the two must never disagree about
+ * whether a role owns the qualified workflow.
+ */
+export function roleMatches(proposedRole: string, targetRoles: string[]): boolean {
   const norm = (s: string) =>
     s.toLowerCase().replace(/vice president/g, 'vp').replace(/chief financial officer/g, 'cfo').replace(/[^a-z ]/g, ' ').trim();
   const p = norm(proposedRole);

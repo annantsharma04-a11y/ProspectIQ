@@ -300,6 +300,40 @@ export function prospectFitState(prospect: ProspectFit): FitState {
   return 'QUALIFIED';
 }
 
+/**
+ * How closely this person is tied to the workflow the COMPANY qualified on.
+ *
+ *   STRONG      a source ties THIS person to the qualified workflow
+ *   REASONABLE  senior/functional enough to be plausible, but nothing ties
+ *               them to the workflow specifically
+ *   WEAK        below the targeting bar, without being categorically unrelated
+ *   UNRELATED   a different function entirely
+ *
+ * This is a strict REFINEMENT of prospectFitState(), not a second system and
+ * not a replacement: STRONG ≡ QUALIFIED, REASONABLE ≡ BORDERLINE, and
+ * WEAK/UNRELATED split what that function collapses into NOT_QUALIFIED. It
+ * reads the same fields, applies the same floor, and changes no decision —
+ * `combineQualification()`'s matrix is untouched.
+ *
+ * It exists because the account is the hard anchor and the person is the
+ * softer signal: "wrong title at a genuinely good account" and "wrong company
+ * entirely" both used to read as NOT_QUALIFIED, which told a reviewer nothing
+ * about whether the ACCOUNT was still worth pursuing through a different
+ * contact.
+ */
+export type PersonRelevance = 'STRONG' | 'REASONABLE' | 'WEAK' | 'UNRELATED';
+
+export function personRelevance(prospect: ProspectFit): PersonRelevance {
+  // A different function entirely — the model judged the role itself low-relevance.
+  if (prospect.classification === 'LOW') return 'UNRELATED';
+  // Below the targeting floor, but not categorically unrelated.
+  if (prospect.score < PROSPECT_FIT_FLOOR) return 'WEAK';
+  // Clears the floor, but nothing ties THIS person to the qualified workflow —
+  // the same inference-only condition prospectFitState() calls BORDERLINE.
+  if (prospect.evidence_basis !== 'OBSERVED' || prospect.classification === 'UNKNOWN') return 'REASONABLE';
+  return 'STRONG';
+}
+
 const FIND_BETTER_CONTACT_SUGGESTION =
   'This person does not appear to own or influence the relevant workflows. Consider identifying a functional owner or decision-maker there instead.';
 

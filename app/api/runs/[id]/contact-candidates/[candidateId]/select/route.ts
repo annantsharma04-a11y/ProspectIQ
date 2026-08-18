@@ -16,9 +16,44 @@ import type { IdentityCandidate } from '@/lib/identity/types';
 import { executePipeline } from '@/lib/pipeline/execute';
 import { checkRateLimit } from '@/lib/rate-limit';
 import type { ContactCandidateStatus } from '@/lib/contacts/types';
+import { preVerifyCandidate } from '@/lib/contacts/preverify';
+import { selectionStatusFor } from '@/lib/contacts/select-ui';
 import { inngest, OUTREACH_RUN_REQUESTED } from '@/inngest/client';
 
 export const runtime = 'nodejs';
+
+/**
+ * The idempotent re-select response.
+ *
+ * This path is where the reported bug lived: it returned HTTP 200 carrying
+ * `resulting_run_id` and nothing else, while the client looked for `run_id`,
+ * a `message` and an `error` — found none of the three, and fell through to
+ * a generic "Could not verify this candidate (HTTP 200)". A successful,
+ * already-completed selection was reported to the user as a verification
+ * failure.
+ *
+ * It now states the verification verdict explicitly (see the contract in
+ * lib/contacts/select-ui.ts) and always carries a human-readable message, so
+ * no branch can leave the client with nothing to say. Legacy fields are kept
+ * alongside for existing consumers.
+ */
+function alreadyResolvedBody(identityStatus: ContactCandidateStatus, resultingRunId: string | null) {
+  const status = selectionStatusFor(identityStatus);
+  const resolvedToRun = status === 'verified' && Boolean(resultingRunId);
+
+  return {
+    ok: resolvedToRun,
+    status,
+    runId: resultingRunId,
+    message: resolvedToRun
+      ? 'This candidate was already verified. Opening the research run that was created for them.'
+      : `This candidate was already reviewed and could not be verified (${identityStatus.toLowerCase()}). Choose another candidate.`,
+    // Legacy shape, retained so existing consumers keep working.
+    identity_status: identityStatus,
+    resulting_run_id: resultingRunId,
+    already_resolved: true,
+  };
+}
 
 /**
  * A human selects a discovered contact candidate.
@@ -41,11 +76,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // the existing outcome rather than re-running verification or creating a
   // second run for the same choice.
   if (candidate.identity_status !== 'DISCOVERED') {
-    return NextResponse.json({
-      identity_status: candidate.identity_status,
-      resulting_run_id: candidate.resulting_run_id,
-      already_resolved: true,
-    });
+    return NextResponse.json(alreadyResolvedBody(candidate.identity_status, candidate.resulting_run_id));
   }
 
   if (!checkRateLimit().ok) {
@@ -62,21 +93,31 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     // resolution state may have changed since, by whichever request won the
     // race, so a plain re-read (not another ownership check) is all this needs.
     const current = await getContactCandidate(candidateId);
-    return NextResponse.json({
-      identity_status: current?.identity_status ?? candidate.identity_status,
-      resulting_run_id: current?.resulting_run_id ?? candidate.resulting_run_id,
-      already_resolved: true,
-    });
+    return NextResponse.json(
+      alreadyResolvedBody(
+        current?.identity_status ?? candidate.identity_status,
+        current?.resulting_run_id ?? candidate.resulting_run_id,
+      ),
+    );
   }
 
-  // No LinkedIn URL means no research target under this system's identity
-  // model — refusing rather than guessing which profile this person owns.
-  if (!candidate.linkedin_url) {
+  // Server-side pre-verification, mirroring the gate the Select button uses
+  // (lib/contacts/preverify.ts). The UI already disables Select for anything
+  // that fails this, so reaching here means either a crafted request or a row
+  // that changed underneath — either way it is refused BEFORE any paid
+  // research call, rather than spending a verification pass to reach the same
+  // conclusion. This is the cheap half of the check; the full identity
+  // verification below still runs in its entirety for everything that passes.
+  const preVerification = preVerifyCandidate(candidate);
+  if (preVerification.eligibility !== 'ELIGIBLE') {
     return NextResponse.json(
       {
-        error:
-          'This candidate has no public LinkedIn URL, so identity cannot be verified. Confirm this person manually, or choose a different candidate.',
-        identity_status: 'DISCOVERED',
+        ok: false,
+        status: 'blocked' as const,
+        error: preVerification.blockedReason ?? 'This candidate cannot be verified.',
+        message: `Candidate could not be verified. Choose another candidate. ${preVerification.blockedReason ?? ''}`.trim(),
+        identity_status: candidate.identity_status,
+        pre_verification: preVerification,
       },
       { status: 422 },
     );
@@ -84,6 +125,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   const parsed = parseLinkedInUrl(candidate.linkedin_url);
   if (!parsed.ok) {
+    // Unreachable in practice — preVerifyCandidate() already parsed this same
+    // URL and would have blocked above. Kept as a type-narrowing guard.
     return NextResponse.json(
       { error: `Stored LinkedIn URL is not a valid profile link: ${parsed.error}`, identity_status: 'DISCOVERED' },
       { status: 422 },
@@ -142,14 +185,27 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     identity_verification: verification,
   });
 
+  // Full verification failed on a candidate that passed pre-verification —
+  // the genuinely unexpected case. This is NOT a pipeline failure: the run
+  // that discovered this candidate is untouched, no prospect or run is
+  // created for the unverified person, and no qualification, evidence or
+  // message data is produced for them. The human is handed back to the
+  // candidate list with a candidate-specific reason.
   if (!verification.proceed) {
     return NextResponse.json({
-      identity_status: status,
-      verification,
+      // HTTP 200 — the request succeeded. `ok: false` reports that the
+      // VERIFICATION did not, which is a different question and now says so
+      // explicitly rather than leaving the client to infer it.
+      ok: false,
+      status: selectionStatusFor(status),
+      runId: null,
       message:
         status === 'AMBIGUOUS'
-          ? 'Identity ambiguous. Choose another candidate or confirm manually.'
-          : `Identity ${status.toLowerCase()} — independent evidence was not strong enough to proceed automatically.`,
+          ? 'Candidate could not be verified because public sources conflict about their identity or current role. Choose another candidate.'
+          : `Candidate could not be verified. Choose another candidate. Independent evidence was ${status.toLowerCase()} for this person.`,
+      identity_status: status,
+      verification,
+      candidate_verification_failed: true,
     });
   }
 
@@ -193,7 +249,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
 
   return NextResponse.json(
-    { identity_status: status, verification, run_id: run.id, prospect_id: run.prospect_id },
+    {
+      ok: true,
+      status: selectionStatusFor(status),
+      runId: run.id,
+      message: 'Candidate verified. Starting research…',
+      identity_status: status,
+      verification,
+      run_id: run.id,
+      prospect_id: run.prospect_id,
+    },
     { status: 201 },
   );
 }

@@ -3,7 +3,12 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { ContactCandidateRow } from '@/lib/contacts/types';
-import { NO_LINKEDIN_MESSAGE, canSelectCandidate, interpretSelectResponse } from '@/lib/contacts/select-ui';
+import {
+  NO_LINKEDIN_MESSAGE,
+  canSelectCandidate,
+  candidatePreVerification,
+  interpretSelectResponse,
+} from '@/lib/contacts/select-ui';
 import { StatusBadge, type StatusTone } from './StatusBadge';
 
 const STATUS_TONE: Record<string, StatusTone> = {
@@ -15,8 +20,30 @@ const STATUS_TONE: Record<string, StatusTone> = {
   REJECTED: 'neutral',
 };
 
+/**
+ * The label a not-yet-selected candidate carries.
+ *
+ * Deliberately NOT "Verified candidate": that claimed more than the app had
+ * actually done. Pre-verification only establishes that a candidate is
+ * ELIGIBLE TO BE OFFERED — the full identity verification runs on selection
+ * and can still reject them, which made "Verified" followed by a verification
+ * failure read as a contradiction. "Pre-verified" names the step that has
+ * genuinely happened, and the sub-label below spells out the one that has not.
+ */
+const PENDING_LABEL = { eligible: 'Pre-verified', blocked: 'Needs verification' } as const;
+
+const PENDING_HINT: Record<'eligible' | 'blocked', string> = {
+  eligible: 'Passed the evidence and profile checks. Full identity verification runs when you select them.',
+  blocked: 'Blocked before selection — the checks below did not pass.',
+};
+
 interface Outcome {
-  kind: 'error' | 'info';
+  /**
+   * 'success' — verification passed and research is starting.
+   * 'info'    — the request worked; the CANDIDATE could not be verified.
+   * 'error'   — the request itself failed (transport/server).
+   */
+  kind: 'error' | 'info' | 'success';
   message: string;
 }
 
@@ -59,9 +86,15 @@ export function ContactCandidates({
           This company appears relevant, but this person is not the best contact for the identified
           workflow.
         </p>
+        {/* States that the search was genuinely widened before giving up —
+            the old wording read as "we looked once and stopped". */}
         <p className="mt-2 text-sm text-muted">
-          No verified contact candidates found. ProspectIQ could not establish a suitable contact
-          from public evidence.
+          No verified primary contact found. ProspectIQ searched the most relevant workflow owners
+          and adjacent functions, but could not establish a candidate with sufficient evidence.
+        </p>
+        <p className="mt-1.5 text-xs text-faint">
+          The account itself is unaffected — it qualified on its own verified evidence, and stays
+          qualified whether or not a contact can be found here.
         </p>
       </div>
     );
@@ -104,6 +137,9 @@ export function ContactCandidates({
     const outcome = interpretSelectResponse({ ok: res.ok, status: res.status, body });
 
     if (outcome.type === 'navigate') {
+      // Verification genuinely succeeded — say so before leaving, so the
+      // success state is visible rather than a silent jump.
+      setOutcomes((prev) => ({ ...prev, [candidateId]: { kind: 'success', message: outcome.message } }));
       // Navigating away — no need to clear busyId, the component is leaving.
       router.push(`/runs/${outcome.runId}`);
       return;
@@ -138,6 +174,7 @@ export function ContactCandidates({
           const resolved = c.identity_status !== 'DISCOVERED';
           const hasLinkedIn = Boolean(c.linkedin_url);
           const selectable = canSelectCandidate(c);
+          const preVerification = candidatePreVerification(c);
           const isBusy = busyId === c.id;
           const outcome = outcomes[c.id];
 
@@ -155,10 +192,33 @@ export function ContactCandidates({
                     {[c.role, c.company].filter(Boolean).join(' · ') || 'Role not established'}
                   </p>
                 </div>
-                <StatusBadge tone={STATUS_TONE[c.identity_status] ?? STATUS_TONE.DISCOVERED} className="shrink-0">
-                  {c.identity_status === 'DISCOVERED' ? 'Not yet verified' : c.identity_status}
-                </StatusBadge>
+                <span
+                  className="shrink-0"
+                  title={resolved ? undefined : PENDING_HINT[selectable ? 'eligible' : 'blocked']}
+                >
+                  <StatusBadge
+                    tone={
+                      resolved
+                        ? (STATUS_TONE[c.identity_status] ?? STATUS_TONE.DISCOVERED)
+                        : selectable
+                          ? 'accent'
+                          : 'amber'
+                    }
+                  >
+                    {resolved
+                      ? c.identity_status
+                      : selectable
+                        ? PENDING_LABEL.eligible
+                        : PENDING_LABEL.blocked}
+                  </StatusBadge>
+                </span>
               </div>
+
+              {/* States plainly that the identity check is still ahead, so
+                  "Pre-verified" is never read as "already verified". */}
+              {!resolved && selectable && (
+                <p className="mt-1 text-[11px] text-faint">{PENDING_HINT.eligible}</p>
+              )}
 
               <p className="mt-1.5 text-xs text-muted">{c.reason}</p>
               {c.evidence[0] && (
@@ -200,7 +260,7 @@ export function ContactCandidates({
                   <button
                     type="button"
                     disabled
-                    title={NO_LINKEDIN_MESSAGE}
+                    title={preVerification.blockedReason ?? NO_LINKEDIN_MESSAGE}
                     className="cursor-not-allowed rounded-lg bg-ink/8 px-3 py-1 text-xs font-medium text-faint"
                   >
                     Select
@@ -224,14 +284,22 @@ export function ContactCandidates({
                 )}
               </div>
 
+              {/* Names the specific check that blocked this candidate, rather
+                  than always claiming the LinkedIn URL was the problem. */}
               {!resolved && !selectable && (
-                <p className="mt-2 text-xs text-faint">{NO_LINKEDIN_MESSAGE}</p>
+                <p className="mt-2 text-xs text-faint">
+                  {preVerification.blockedReason ?? NO_LINKEDIN_MESSAGE}
+                </p>
               )}
 
               {outcome?.message && (
                 <p
                   className={`mt-2 rounded px-2 py-1.5 text-xs ${
-                    outcome.kind === 'error' ? 'bg-red-600/8 text-red-800' : 'bg-amber-600/8 text-amber-800'
+                    outcome.kind === 'error'
+                      ? 'bg-red-600/8 text-red-800'
+                      : outcome.kind === 'success'
+                        ? 'bg-emerald-600/8 text-emerald-800'
+                        : 'bg-amber-600/8 text-amber-800'
                   }`}
                   role="status"
                 >

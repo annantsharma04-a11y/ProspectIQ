@@ -18,7 +18,11 @@ const candidate = (over: Partial<ContactCandidateRow> = {}): ContactCandidateRow
   company: 'Acme',
   linkedin_url: 'https://www.linkedin.com/in/jane-kapoor',
   reason: 'Public role matches the qualified workflow.',
-  evidence: [{ source_url: 'https://a.com', quote: 'q' }],
+  // Realistic evidence: canSelectCandidate() now also requires the cited
+  // evidence to actually name this person and tie them to this company
+  // (lib/contacts/preverify.ts). A placeholder quote would fail that gate for
+  // reasons unrelated to what these status tests are checking.
+  evidence: [{ source_url: 'https://a.com', quote: 'Jane Kapoor is VP Finance at Acme.' }],
   confidence: 78,
   rank_score: 82.5,
   identity_status: 'DISCOVERED',
@@ -68,7 +72,12 @@ describe('interpretSelectResponse — every response produces a visible outcome'
       status: 201,
       body: { run_id: 'run-123', identity_status: 'VERIFIED' },
     });
-    expect(outcome).toEqual({ type: 'navigate', runId: 'run-123' });
+    // Now carries the success message the UI shows before navigating.
+    expect(outcome).toEqual({
+      type: 'navigate',
+      runId: 'run-123',
+      message: 'Candidate verified. Starting research…',
+    });
   });
 
   it('a 422 (no LinkedIn URL) is an error message, never silently ignored', () => {
@@ -107,10 +116,12 @@ describe('interpretSelectResponse — every response produces a visible outcome'
 
   it('a 500 with no message still produces a readable fallback, never blank', () => {
     const outcome = interpretSelectResponse({ ok: false, status: 500, body: {} });
+    // Describes the TRANSPORT failure, not a verification verdict — a request
+    // that never reached a verification result must not be reported as one.
     expect(outcome).toEqual({
       type: 'message',
       kind: 'error',
-      message: 'Could not verify this candidate (HTTP 500). Try again.',
+      message: 'The request failed (HTTP 500). Try again.',
     });
   });
 

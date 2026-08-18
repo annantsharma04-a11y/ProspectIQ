@@ -143,7 +143,18 @@ describe('existing AP and compound payment-dispute matching still works', () => 
   it('"payment dispute" (the AP family compound phrase) still resolves to finance roles', () => {
     const roles = rolesForWorkflows(['High volume of payment dispute cases in AP']);
     expect(roles).toContain('CFO');
-    expect(roles).toContain('Head of Accounts Payable');
+    // Still finance-led, as this test has always asserted.
+    expect(roles).toContain('VP Finance');
+    expect(roles).toContain('Controller');
+  });
+
+  it('a signal naming BOTH an AP and a dispute workflow now surfaces owners of each', () => {
+    // This phrase matches the AP family AND the chargebacks family. Sequential
+    // allocation let AP consume the whole budget, so payments/dispute owners
+    // were never searched for — the starvation bug. Both are represented now.
+    const roles = rolesForWorkflows(['High volume of payment dispute cases in AP']);
+    expect(roles).toContain('CFO'); // AP family
+    expect(roles).toContain('Head of Payments'); // chargebacks family
   });
 
   it('plain accounts payable / invoice / vendor payment language is unaffected', () => {

@@ -83,7 +83,7 @@ const candidate = (): ContactCandidateRow => ({
   company: 'Bluewave Freight',
   linkedin_url: 'https://www.linkedin.com/in/jordan-alt',
   reason: 'Owns the workflow the original contact did not.',
-  evidence: [{ source_url: 'https://example.com/a', quote: 'Jordan leads ops.' }],
+  evidence: [{ source_url: 'https://example.com/a', quote: 'Jordan Alt leads operations at Bluewave Freight.' }],
   confidence: 80,
   rank_score: 80,
   identity_status: 'DISCOVERED',

@@ -5,7 +5,9 @@ import Link from 'next/link';
 import { createBrowserSupabase } from '@/lib/supabase/client';
 import { STAGE_ORDER, STAGE_LABELS, type RunSnapshot, type RunStageRow, type StageName } from '@/lib/types';
 import { contactCandidatesStageIsVisible } from '@/lib/contacts/types';
+import { classifyFailure } from '@/lib/pipeline/failure-classification';
 import { StatusBadge, type StatusTone } from './StatusBadge';
+import { FailureRecovery } from './FailureRecovery';
 
 const ACTIVE = new Set(['queued', 'running']);
 
@@ -112,6 +114,15 @@ export function LiveRunView({
   const failed = snapshot.run.status === 'failed';
   const pendingAnalysis = snapshot.run.status === 'ai_analysis_pending';
 
+  // Why this run stopped, and who can fix it. Only surfaced when it changes
+  // what the user should DO: a correctable input gets an edit form, and a
+  // deployment misconfiguration gets an explanation instead of a retry that
+  // cannot succeed. An ordinary provider failure is already covered by the
+  // retry affordances below, so it is not repeated here.
+  const failure = classifyFailure(snapshot.run);
+  const showRecovery = Boolean(failure && (failure.isEditable || failure.kind === 'CONFIGURATION'));
+  const retryCannotHelp = failure?.retryAction === null;
+
   // find_contact_candidates is shown only in the one state it actually did
   // something in — see contactCandidatesStageIsVisible for why.
   const showContactCandidatesStage = contactCandidatesStageIsVisible(
@@ -202,15 +213,21 @@ export function LiveRunView({
         <div className="mt-4 rounded-lg border border-red-600/25 bg-red-600/6 p-3">
           <p className="text-sm font-medium text-red-800">Run failed</p>
           <p className="mt-1 text-xs text-red-700">{snapshot.run.error}</p>
-          <button
-            onClick={() => retry('retry')}
-            disabled={retrying}
-            className="mt-2 rounded-lg border border-red-600/30 bg-surface px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-600/10 disabled:opacity-50"
-          >
-            {retrying ? 'Retrying…' : 'Retry run'}
-          </button>
+          {/* Suppressed when retrying provably cannot help (a missing API key
+              does not become present on a second attempt). */}
+          {!retryCannotHelp && (
+            <button
+              onClick={() => retry('retry')}
+              disabled={retrying}
+              className="mt-2 rounded-lg border border-red-600/30 bg-surface px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-600/10 disabled:opacity-50"
+            >
+              {retrying ? 'Retrying…' : 'Retry run'}
+            </button>
+          )}
         </div>
       )}
+
+      {showRecovery && <FailureRecovery run={snapshot.run} onRetried={refresh} />}
 
       {!active && !failed && !pendingAnalysis && (
         <button

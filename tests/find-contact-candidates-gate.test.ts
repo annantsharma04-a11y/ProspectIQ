@@ -46,7 +46,15 @@ vi.mock('@/lib/supabase/queries', () => ({
 }));
 
 vi.mock('@/lib/contacts/discover', () => ({ discoverContacts: (...a: unknown[]) => mockDiscoverContacts(...a) }));
-vi.mock('@/lib/contacts/rank', () => ({ rankCandidates: (...a: unknown[]) => mockRankCandidates(...a), MAX_CANDIDATES: 5 }));
+vi.mock('@/lib/contacts/rank', () => ({
+  rankCandidates: (...a: unknown[]) => mockRankCandidates(...a),
+  MAX_CANDIDATES: 5,
+  // preverify.ts reuses the real role gate from rank.ts; ranking is mocked
+  // here but the ROLE CHECK must stay real, or pre-verification would be
+  // silently weakened inside these tests.
+  roleMatches: (role: string, targets: string[]) =>
+    targets.some((t) => t.toLowerCase() === role.toLowerCase()),
+}));
 
 const { findContactCandidatesStage, contactDiscoveryApplicable } = await import('@/lib/pipeline/stages');
 const { newContext } = await import('@/lib/pipeline/context');
@@ -213,8 +221,62 @@ describe('findContactCandidatesStage — real stage invocation', () => {
 
     await findContactCandidatesStage(ctx);
 
-    expect(mockDiscoverContacts).toHaveBeenCalledTimes(1);
+    // Discovery is attempted rather than skipped. It is called more than once
+    // here on purpose: this mock yields zero ELIGIBLE candidates, which is
+    // exactly the condition the fallback levels exist for, so the stage widens
+    // the search instead of declaring nobody was found after one pass.
+    expect(mockDiscoverContacts).toHaveBeenCalled();
     const finishCall = mockFinishStage.mock.calls[0][1];
     expect(finishCall.status).not.toBe('skipped');
+  });
+
+  it('escalates through fallback levels only while nothing eligible has been found', async () => {
+    mockDiscoverContacts.mockResolvedValue({ proposed: [], sources: [], roles: ['CFO'], queriesRun: 1, queriesOk: 1 });
+    mockRankCandidates.mockReturnValue([]);
+
+    const ctx = newContext(run());
+    ctx.qualification = qualification(borderlineProspect(), qualifiedCompany());
+
+    await findContactCandidatesStage(ctx);
+
+    const output = mockFinishStage.mock.calls[0][1].output;
+    // Every level that ran is recorded, with what it searched and what it found,
+    // so a no-candidate result can show how hard the system actually tried.
+    expect(Array.isArray(output.discovery_levels)).toBe(true);
+    expect(output.discovery_levels.length).toBeGreaterThan(1);
+    expect(output.discovery_levels[0].level).toBe(1);
+    for (const attempt of output.discovery_levels) {
+      expect(attempt.eligible).toBe(0);
+      expect(attempt.roles.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('stops at level 1 when it already found an eligible candidate — no extra provider calls', async () => {
+    mockDiscoverContacts.mockResolvedValue({
+      proposed: [], sources: [], roles: ['CFO'], queriesRun: 1, queriesOk: 1,
+    });
+    // A candidate that passes ranking AND pre-verification: real profile URL,
+    // evidence naming this person at this company.
+    mockRankCandidates.mockReturnValue([
+      {
+        name: 'Dana Reyes',
+        role: 'CFO',
+        linkedin_url: 'https://www.linkedin.com/in/dana-reyes',
+        evidence: { source_url: 'https://example.com/a', quote: 'Dana Reyes is CFO at Acme Logistics.' },
+        reason: 'Public role matches the qualified workflow.',
+        confidence: 80,
+        rankScore: 80,
+      },
+    ]);
+
+    const ctx = newContext(run());
+    ctx.qualification = qualification(borderlineProspect(), qualifiedCompany());
+
+    await findContactCandidatesStage(ctx);
+
+    expect(mockDiscoverContacts).toHaveBeenCalledTimes(1);
+    const output = mockFinishStage.mock.calls[0][1].output;
+    expect(output.discovery_levels).toHaveLength(1);
+    expect(output.discovery_levels[0].eligible).toBeGreaterThan(0);
   });
 });

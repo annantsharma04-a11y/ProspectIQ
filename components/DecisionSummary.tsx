@@ -1,12 +1,31 @@
 import { StatusBadge, type StatusTone } from './StatusBadge';
 import { buildDecisionSummary, ACTION_TONE } from '@/lib/ui/decision-summary';
-import type { FitState } from '@/lib/qualification/types';
+import type { FitState, PersonRelevance } from '@/lib/qualification/types';
 import type { RunRow } from '@/lib/types';
 
 const FIT_TONE: Record<FitState, StatusTone> = {
   QUALIFIED: 'emerald',
   BORDERLINE: 'amber',
   NOT_QUALIFIED: 'neutral',
+};
+
+/**
+ * The contact reads on its own four-tier scale, deliberately NOT the
+ * account's. A weak contact at a strong account is a reason to find a better
+ * contact — never a reason to read the account as unqualified.
+ */
+const RELEVANCE_TONE: Record<PersonRelevance, StatusTone> = {
+  STRONG: 'emerald',
+  REASONABLE: 'accent',
+  WEAK: 'amber',
+  UNRELATED: 'neutral',
+};
+
+const RELEVANCE_LABEL: Record<PersonRelevance, string> = {
+  STRONG: 'Strong — owns this workflow',
+  REASONABLE: 'Reasonable — plausible owner',
+  WEAK: 'Weak — limited connection',
+  UNRELATED: 'Unrelated function',
 };
 
 /**
@@ -34,14 +53,23 @@ export function DecisionSummary({ run }: { run: Pick<RunRow, 'qualification'> })
           </dd>
         </div>
         <div>
-          <dt className="text-[10px] font-semibold uppercase tracking-wider text-faint">Contact status</dt>
+          <dt className="text-[10px] font-semibold uppercase tracking-wider text-faint">Contact relevance</dt>
           <dd className="mt-1">
-            <StatusBadge tone={FIT_TONE[summary.contactStatus]}>
-              {summary.contactStatus.replace(/_/g, ' ')}
+            <StatusBadge tone={RELEVANCE_TONE[summary.personRelevance]}>
+              {RELEVANCE_LABEL[summary.personRelevance]}
             </StatusBadge>
           </dd>
         </div>
       </dl>
+
+      {/* Says plainly that a weak contact is not a verdict on the account —
+          the account is the hard anchor, the person is the softer signal. */}
+      {summary.accountStatus === 'QUALIFIED' && summary.personRelevance !== 'STRONG' && (
+        <p className="mt-2 text-xs text-muted">
+          The account qualified on verified evidence. This contact is a separate,
+          softer judgment — a better contact can be found without re-qualifying the account.
+        </p>
+      )}
 
       <div className="mt-3 border-t border-hairline pt-3">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-faint">

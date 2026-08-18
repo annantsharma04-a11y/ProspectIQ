@@ -61,7 +61,9 @@ import {
   type TargetQualification,
 } from '@/lib/qualification/types';
 import { discoverContacts } from '@/lib/contacts/discover';
+import { rolesForWorkflows, adjacentRolesForWorkflows, deeperRolesForWorkflows } from '@/lib/contacts/roles';
 import { rankCandidates } from '@/lib/contacts/rank';
+import { preVerifyCandidate } from '@/lib/contacts/preverify';
 import { createContactCandidates } from '@/lib/supabase/queries';
 import { matchApprovedSolution, solutionForPrompt } from '@/lib/solutions/match';
 import { NO_SOLUTION_MATCH_MESSAGE } from '@/lib/solutions/types';
@@ -1016,17 +1018,85 @@ export async function findContactCandidatesStage(ctx: PipelineContext): Promise<
     }
 
     const domains = ctx.identity?.company_domain ? [ctx.identity.company_domain] : [];
-    const result = await discoverContacts({
-      company,
-      workflowSignals,
-      existingSources: ctx.sources,
-      companyDomains: domains,
-    });
 
-    ctx.sources = result.sources;
-    await persistSources(ctx);
+    // Discovery runs in deterministic LEVELS, widening only when the previous
+    // level produced nothing a human could actually act on.
+    //
+    //   1  the workflow's primary functional owners
+    //   2  owners of an ADJACENT function for the same workflow
+    //   3  deeper into the same families, past the primary search's cap
+    //
+    // The rule is: STRICT about verification, more flexible about discovery.
+    // Every level's candidates go through the identical ranking, evidence and
+    // pre-verification gates below — widening changes only WHERE we look, and
+    // never what a candidate must prove. A level is skipped entirely once an
+    // eligible candidate exists, so the common case costs exactly what it did
+    // before.
+    const levelsAttempted: { level: number; roles: string[]; eligible: number }[] = [];
+    const searchedRoles: string[] = [];
+    let allProposed: Awaited<ReturnType<typeof discoverContacts>>['proposed'] = [];
+    let queriesRun = 0;
+    let queriesOk = 0;
+    let preVerified: { candidate: (typeof rankedForLevel)[number]; result: ReturnType<typeof preVerifyCandidate> }[] = [];
+    let rankedForLevel: ReturnType<typeof rankCandidates> = [];
 
-    const ranked = rankCandidates(result.proposed, result.sources, result.roles, workflowSignals[0]);
+    for (const level of [1, 2, 3] as const) {
+      const levelRoles =
+        level === 1
+          ? rolesForWorkflows(workflowSignals)
+          : level === 2
+            ? adjacentRolesForWorkflows(workflowSignals, searchedRoles)
+            : deeperRolesForWorkflows(workflowSignals, searchedRoles);
+
+      if (levelRoles.length === 0) continue;
+
+      const result = await discoverContacts({
+        company,
+        workflowSignals,
+        existingSources: ctx.sources,
+        companyDomains: domains,
+        roles: levelRoles,
+      });
+
+      ctx.sources = result.sources;
+      await persistSources(ctx);
+
+      searchedRoles.push(...levelRoles);
+      queriesRun += result.queriesRun;
+      queriesOk += result.queriesOk;
+      allProposed = [...allProposed, ...result.proposed];
+
+      // Ranked and pre-verified against every role searched so far, so a
+      // candidate found at one level is still judged against the full set of
+      // legitimate owner titles rather than only that level's slice.
+      rankedForLevel = rankCandidates(allProposed, ctx.sources, searchedRoles, workflowSignals[0]);
+      preVerified = rankedForLevel.map((c) => ({
+        candidate: c,
+        result: preVerifyCandidate(
+          { name: c.name, role: c.role, company, linkedin_url: c.linkedin_url, evidence: [c.evidence] },
+          { targetRoles: searchedRoles },
+        ),
+      }));
+
+      const eligibleCount = preVerified.filter((p) => p.result.eligibility === 'ELIGIBLE').length;
+      levelsAttempted.push({ level, roles: levelRoles, eligible: eligibleCount });
+
+      // Something a human can actually act on — stop, rather than spending
+      // further provider calls to lengthen a list that is already useful.
+      if (eligibleCount > 0) break;
+    }
+
+    const result = { roles: searchedRoles, queriesRun, queriesOk, proposed: allProposed };
+
+    // EXCLUDED means there is nothing to verify against at all (no name, no
+    // usable profile URL, no evidence) — those are dropped from suggestions
+    // entirely. NEEDS_VERIFICATION is a real conflict in otherwise-usable
+    // data: still shown, so a human can see it and judge, but persisted as
+    // PARTIAL so Select is disabled.
+    const excluded = preVerified.filter((p) => p.result.eligibility === 'EXCLUDED');
+    const offered = preVerified.filter((p) => p.result.eligibility !== 'EXCLUDED');
+
+    const ranked = offered.map((p) => p.candidate);
     ctx.contactCandidates = ranked;
 
     // Persistence is wrapped on its own, separately from discovery above: the
@@ -1042,7 +1112,7 @@ export async function findContactCandidatesStage(ctx: PipelineContext): Promise<
       try {
         await createContactCandidates(
           ctx.runId,
-          ranked.map((c) => ({
+          offered.map(({ candidate: c, result }) => ({
             name: c.name,
             role: c.role,
             company,
@@ -1051,6 +1121,11 @@ export async function findContactCandidatesStage(ctx: PipelineContext): Promise<
             evidence: [c.evidence],
             confidence: c.confidence,
             rank_score: c.rankScore,
+            // ELIGIBLE stays DISCOVERED — the pending-selection state Select
+            // acts on. A pre-verification conflict lands as PARTIAL, which
+            // canSelectCandidate() already treats as non-selectable, so the
+            // row is non-selectable from the moment it exists.
+            identity_status: result.eligibility === 'ELIGIBLE' ? ('DISCOVERED' as const) : ('PARTIAL' as const),
           })),
         );
       } catch (err) {
@@ -1065,7 +1140,7 @@ export async function findContactCandidatesStage(ctx: PipelineContext): Promise<
         ? `${ranked.length} candidate(s) found for ${result.roles.join(', ')} at ${company}, but they could not be saved: ${persistenceError}`
         : found
           ? `${ranked.length} candidate(s) found for ${result.roles.join(', ')} at ${company}.`
-          : `No verified candidates found for ${result.roles.join(', ')} at ${company} — searched ${result.queriesOk}/${result.queriesRun} queries.`,
+          : `No verified candidates found at ${company} after ${levelsAttempted.length} discovery level(s) covering ${result.roles.join(', ')} — searched ${result.queriesOk}/${result.queriesRun} queries.`,
       output: {
         applicable: true,
         company,
@@ -1075,10 +1150,30 @@ export async function findContactCandidatesStage(ctx: PipelineContext): Promise<
         // persistence_error field makes explicit rather than silent.
         candidates: ranked,
         queries_ok: result.queriesOk,
+        // Which levels actually ran, and what each looked for — so a
+        // no-candidate result can state how hard the system tried rather than
+        // just asserting that nobody was found.
+        discovery_levels: levelsAttempted,
         queries_run: result.queriesRun,
         proposed_count: result.proposed.length,
         suggestion: q?.suggestion,
         persistence_error: persistenceError,
+        // Exactly why each candidate is or is not offered as selectable —
+        // recorded so a blocked suggestion is inspectable after the fact
+        // rather than silently missing from the list.
+        pre_verification: {
+          eligible: preVerified.filter((p) => p.result.eligibility === 'ELIGIBLE').length,
+          needs_verification: preVerified.filter((p) => p.result.eligibility === 'NEEDS_VERIFICATION').length,
+          excluded: excluded.length,
+          blocked: preVerified
+            .filter((p) => p.result.eligibility !== 'ELIGIBLE')
+            .map((p) => ({
+              name: p.candidate.name,
+              eligibility: p.result.eligibility,
+              reason: p.result.blockedReason,
+              checks: p.result.checks,
+            })),
+        },
       },
       value: undefined,
     };

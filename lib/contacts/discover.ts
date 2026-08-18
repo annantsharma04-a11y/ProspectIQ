@@ -58,6 +58,15 @@ export interface DiscoverContactsInput {
   /** Already-gathered company research; new queries are merged into this, never replacing it. */
   existingSources: NormalizedSource[];
   companyDomains: string[];
+  /**
+   * Explicit role titles to search for, overriding the ones derived from
+   * `workflowSignals`. Used by the fallback discovery levels in
+   * findContactCandidatesStage, which decide WHICH roles to try next based on
+   * whether the previous level produced an eligible candidate — something
+   * only the caller can know, since eligibility is judged after ranking and
+   * pre-verification. Undefined keeps the original behavior exactly.
+   */
+  roles?: string[];
 }
 
 export interface DiscoverContactsResult {
@@ -123,7 +132,7 @@ const SCHEMA: JsonSchema = {
  * quote before anything becomes a persisted candidate.
  */
 export async function discoverContacts(input: DiscoverContactsInput): Promise<DiscoverContactsResult> {
-  const roles = rolesForWorkflows(input.workflowSignals);
+  const roles = input.roles ?? rolesForWorkflows(input.workflowSignals);
 
   if (roles.length === 0) {
     // No workflow in this qualification maps to a known functional owner.

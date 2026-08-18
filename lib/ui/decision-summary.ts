@@ -9,7 +9,14 @@
 // full Target Qualification panel below it.
 
 import type { RunRow } from '@/lib/types';
-import { companyFitState, prospectFitState, type FitState, type QualificationAction } from '@/lib/qualification/types';
+import {
+  companyFitState,
+  personRelevance,
+  prospectFitState,
+  type FitState,
+  type PersonRelevance,
+  type QualificationAction,
+} from '@/lib/qualification/types';
 import type { StatusTone } from '@/components/StatusBadge';
 
 /** The five canonical actions of the product's decision matrix. */
@@ -51,6 +58,15 @@ export const ACTION_TONE: Record<DecisionAction, StatusTone> = {
 export interface DecisionSummaryData {
   accountStatus: FitState;
   contactStatus: FitState;
+  /**
+   * How closely the submitted person is tied to the qualified workflow —
+   * finer-grained than `contactStatus`, which collapses "wrong title at a good
+   * account" and "wrong company entirely" into one NOT_QUALIFIED.
+   *
+   * The account is the hard anchor; this is the softer signal. It never
+   * changes `accountStatus` or `action`, and it cannot qualify a company.
+   */
+  personRelevance: PersonRelevance;
   action: DecisionAction;
   /** The same evidence-based reason shown in the full qualification panel. */
   reason: string;
@@ -64,6 +80,7 @@ export function buildDecisionSummary(run: Pick<RunRow, 'qualification'>): Decisi
   return {
     accountStatus: companyFitState(q.company_fit),
     contactStatus: prospectFitState(q.prospect_fit),
+    personRelevance: personRelevance(q.prospect_fit),
     action: DECISION_ACTION[q.action],
     reason: q.reason,
   };

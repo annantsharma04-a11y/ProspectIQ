@@ -441,9 +441,18 @@ export async function deleteDrafts(runId: string): Promise<void> {
 
 // ─── contact candidates ──────────────────────────────────────────────────────
 
+/**
+ * `identity_status` is optional and defaults to DISCOVERED in the database.
+ * Discovery now sets it explicitly to PARTIAL for a candidate that failed
+ * lightweight pre-verification (see lib/contacts/preverify.ts), so the row
+ * arrives already non-selectable rather than being offered and then refused.
+ * Only values the table's own CHECK constraint allows are accepted.
+ */
 export async function createContactCandidates(
   runId: string,
-  candidates: Omit<ContactCandidateRow, 'id' | 'run_id' | 'identity_status' | 'identity_verification' | 'selected_at' | 'resulting_run_id' | 'created_at'>[],
+  candidates: (Omit<ContactCandidateRow, 'id' | 'run_id' | 'identity_status' | 'identity_verification' | 'selected_at' | 'resulting_run_id' | 'created_at'> & {
+    identity_status?: ContactCandidateRow['identity_status'];
+  })[],
 ): Promise<ContactCandidateRow[]> {
   if (candidates.length === 0) return [];
   const supabase = createServiceClient();
