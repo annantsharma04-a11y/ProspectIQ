@@ -54,7 +54,12 @@ import { discoverCandidates } from '@/lib/identity/discover';
 import { verifySelectedCandidate } from '@/lib/identity/verify';
 import { decideIdentity, selectCandidate, accountFields } from '@/lib/identity/types';
 import { fieldRecoveryQueries, recoverIdentityField, type RecoverableField } from '@/lib/identity/recover-field';
-import { combineQualification, PROSPECT_FIT_FLOOR, COMPANY_FIT_FLOOR } from '@/lib/qualification/types';
+import {
+  combineQualification,
+  PROSPECT_FIT_FLOOR,
+  COMPANY_FIT_FLOOR,
+  type TargetQualification,
+} from '@/lib/qualification/types';
 import { discoverContacts } from '@/lib/contacts/discover';
 import { rankCandidates } from '@/lib/contacts/rank';
 import { createContactCandidates } from '@/lib/supabase/queries';
@@ -888,6 +893,7 @@ export async function qualifyCompanyStage(ctx: PipelineContext): Promise<void> {
         target_qualification: {
           overall_fit: q.overall_fit,
           classification: q.classification,
+          action: q.action,
           reason: q.reason,
           proceed: q.proceed,
           suggestion: q.suggestion,
@@ -900,40 +906,70 @@ export async function qualifyCompanyStage(ctx: PipelineContext): Promise<void> {
 
 // ─── contact candidate discovery ─────────────────────────────────────────────
 //
-// Runs only in one specific state: the company qualified, but the submitted
-// person does not own the relevant workflow. That is exactly the state
-// combineQualification already flags via a non-null `suggestion` — this stage
-// reuses that flag rather than re-deriving "is the prospect weak" itself.
+// Runs only in the two matrix cells where the COMPANY is confirmed QUALIFIED
+// but the submitted person is not (VERIFY_BETTER_CONTACT, FIND_BETTER_
+// CONTACT) — see CONTACT_DISCOVERY_ACTIONS below. A BORDERLINE company never
+// triggers this stage, however BORDERLINE the prospect also is: an
+// unconfirmed account doesn't get a paid search for a DIFFERENT contact,
+// it gets exploratory outreach (if the prospect is decent) or held for a
+// human (if not) — see combineQualification's matrix.
 //
-// Every other run — fully qualified, or company also weak — passes through as
-// a zero-cost no-op. No query, no model call, nothing persisted.
+// Every other run — fully qualified, company not qualified, or company only
+// borderline — passes through as a zero-cost no-op. No query, no model call,
+// nothing persisted.
+
+/**
+ * The only two decision-matrix actions that mean "the company is confirmed,
+ * go find a different contact there." Everything else — including every
+ * BORDERLINE-company action, even though those can also carry `proceed:
+ * false` (FIND_BETTER_CONTACT_OR_HOLD) — must never trigger a paid discovery
+ * search, because the account itself isn't confirmed yet.
+ *
+ * Checked directly against `action` rather than inferred from `!proceed &&
+ * suggestion`: that combination happens to be true only for these two
+ * actions today, but a boolean heuristic is one future action away from
+ * silently matching something it shouldn't. An explicit whitelist keyed to
+ * the exhaustive QualificationAction enum can't drift out of sync with the
+ * decision matrix the way an inferred condition can.
+ */
+const CONTACT_DISCOVERY_ACTIONS = new Set<TargetQualification['action']>([
+  'VERIFY_BETTER_CONTACT',
+  'FIND_BETTER_CONTACT',
+]);
+
+/**
+ * Exported so the gate itself — not just the underlying matrix — has a
+ * direct, fast, no-mocking-required regression test surface. This is the
+ * exact predicate `findContactCandidatesStage` runs; a test importing and
+ * calling this function is testing production wiring, not a parallel
+ * reimplementation of it.
+ */
+export function contactDiscoveryApplicable(q: TargetQualification | null): boolean {
+  return Boolean(q && CONTACT_DISCOVERY_ACTIONS.has(q.action));
+}
+
+/** Why this stage is a no-op, keyed directly off `action` — no proceed/classification inference. */
+const SKIP_REASON: Record<TargetQualification['action'], string> = {
+  TARGET_DIRECTLY: 'PROSPECT_QUALIFIED',
+  VERIFY_BETTER_CONTACT: 'NO_SUGGESTION', // unreachable — this action IS applicable
+  FIND_BETTER_CONTACT: 'NO_SUGGESTION', // unreachable — this action IS applicable
+  EXPLORATORY_OUTREACH: 'COMPANY_BORDERLINE_EXPLORATORY',
+  EXPLORATORY_OUTREACH_IF_SIGNAL: 'COMPANY_BORDERLINE_EXPLORATORY',
+  FIND_BETTER_CONTACT_OR_HOLD: 'COMPANY_BORDERLINE',
+  DO_NOT_CONTACT: 'NOT_QUALIFIED',
+};
 
 export async function findContactCandidatesStage(ctx: PipelineContext): Promise<void> {
   await runStage(ctx, 'find_contact_candidates', async () => {
     const q = ctx.qualification;
-    // Reuses qualification's own decision, never re-derives it: `suggestion`
-    // is set by combineQualification in EXACTLY the states where the company
-    // stands on its own but the submitted person does not — both the plain
-    // "prospect below the floor" case and the "prospect fit rests on inferred
-    // seniority, not an observed workflow link" case. Every other non-proceed
-    // state (company weak, company evidence itself only inferred, either side
-    // UNKNOWN) leaves `suggestion` null, and this stage stays a no-op there —
-    // there is either no qualified account to search at, or too much
-    // uncertainty to say the CONTACT specifically is the problem.
-    const applicable = Boolean(q && !q.proceed && q.suggestion);
+    const applicable = contactDiscoveryApplicable(q);
 
     if (!applicable) {
-      const reason = q?.proceed
-        ? 'PROSPECT_QUALIFIED'
-        : q?.classification === 'NOT_QUALIFIED'
-          ? 'NOT_QUALIFIED'
-          : q
-            ? 'NO_SUGGESTION'
-            : 'NO_QUALIFICATION';
+      const reason = q ? SKIP_REASON[q.action] : 'NO_QUALIFICATION';
       return {
         status: 'skipped' as const,
         summary: q?.proceed
-          ? 'Not applicable — the submitted prospect already qualified.'
+          ? 'Not applicable — the submitted prospect already qualified or is proceeding as exploratory outreach.'
           : q
             ? `Not applicable — ${q.reason}`
             : 'Not applicable — qualification did not run.',
@@ -2019,8 +2055,12 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
 /**
  * One targeted rewrite when the first draft reads as generic. This is the only
  * place a second model call can happen, and only for this specific failure.
+ *
+ * Exported so `regenerateMessageOnly()` (lib/pipeline/execute.ts) can reuse it
+ * directly for a user-triggered "Regenerate message" action — same rewrite
+ * mechanics, same fixed hook, just invoked outside the automatic quality gate.
  */
-async function regenerateMessage(
+export async function regenerateMessage(
   ctx: PipelineContext,
   directive: string,
 ): Promise<string | null> {

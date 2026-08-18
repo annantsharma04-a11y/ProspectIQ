@@ -12,6 +12,7 @@ import { StageDetail } from '@/components/StageDetail';
 import { getAuthenticatedUser } from '@/lib/supabase/server';
 import { STAGE_ORDER, STAGE_LABELS, type StageName } from '@/lib/types';
 import { contactCandidatesStageIsVisible } from '@/lib/contacts/types';
+import { stageNeedsSources } from '@/lib/research/top-sources';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,15 +33,18 @@ export default async function StagePage({
   const row = await getStage(id, stage as StageName);
   if (!row) notFound();
 
-  // Research stages show the sources they drew on. Both reads are already
-  // scoped to this run, which ownership has been checked for above, and neither
-  // contacts a provider or a model.
-  const isResearch = stage === 'research_prospect' || stage === 'research_company';
+  // Stages that show sources/signals: the two research stages (their own
+  // findings) and collect_signals (the consolidated evidence set built from
+  // both of them). Every other stage's detail is fully derived from its own
+  // recorded `output`, so it reads nothing else needs. Both reads are already
+  // scoped to this run, which ownership has been checked for above, and
+  // neither contacts a provider or a model.
+  const needsSources = stageNeedsSources(stage);
   const isContactDiscovery = stage === 'find_contact_candidates';
   const [all, sources, signals, contactCandidates] = await Promise.all([
     listStages(id),
-    isResearch ? listSources(id) : Promise.resolve([]),
-    isResearch ? listSignals(id) : Promise.resolve([]),
+    needsSources ? listSources(id) : Promise.resolve([]),
+    needsSources ? listSignals(id) : Promise.resolve([]),
     isContactDiscovery ? listContactCandidates(id) : Promise.resolve([]),
   ]);
   // find_contact_candidates is a real stage but a no-op on every run except

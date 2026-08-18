@@ -10,12 +10,14 @@ import {
   updateRun,
   listSources,
   getStage,
+  getDraft,
   syncProspectFromRun,
 } from '@/lib/supabase/queries';
 import { newContext, StageAbort, type PipelineContext } from './context';
 import type { NormalizedSource } from '@/lib/research/normalize';
 import { resolveIdentity } from '@/lib/research/identity';
 import { parseLinkedInUrl } from '@/lib/linkedin/url';
+import type { ScoredSignal } from '@/lib/signals/types';
 import {
   validateInputStage,
   identifyProspectStage,
@@ -38,6 +40,7 @@ import {
   generateMessageStage,
   validateClaimsStage,
   readyForReviewStage,
+  regenerateMessage,
 } from './stages';
 
 /**
@@ -250,6 +253,62 @@ export async function resumeAfterIdentity(runId: string): Promise<void> {
   }
 }
 
+/**
+ * Regenerate ONLY the outreach message on a run that already has a verified
+ * hook and a draft — new wording, same evidence, same hook. No research, no
+ * qualification, no re-derivation of candidate signals: those are exactly
+ * what `retryAnalysis()` above redoes, and this deliberately does not.
+ *
+ * Ends by running the SAME voice/personalization checks and the SAME
+ * validate_claims stage as a normal run — a user-requested rewrite gets no
+ * less scrutiny than the original draft did.
+ */
+export async function regenerateMessageOnly(runId: string): Promise<void> {
+  const run = await getRun(runId);
+  if (!run) throw new Error(`Run ${runId} not found`);
+  const previousStatus = run.status;
+
+  const ctx = await rehydrateForMessageRegeneration(runId);
+
+  await updateRun(runId, { status: 'running', error: null, ai_error_type: null, completed_at: null });
+
+  try {
+    if (!ctx.hook) {
+      throw new Error('No verified hook on this run — there is nothing to regenerate a message from.');
+    }
+
+    const directive =
+      'Write a genuinely different version of this outreach message: new phrasing, new structure, ' +
+      'a different opening line from before. Stay grounded in the same verified observation and keep ' +
+      'every fact accurate — do not add or drop claims.';
+    const text = await regenerateMessage(ctx, directive);
+    if (!text) {
+      throw new Error('The model could not produce a new draft. The existing message is unchanged.');
+    }
+
+    // Same save-and-check path a normal run uses: personalization/opener/voice
+    // checks, persist the draft, validate its claims, then finalize status.
+    await generateMessageStage(ctx);
+    await validateClaimsStage(ctx);
+    await readyForReviewStage(ctx);
+  } catch (err) {
+    // A StageAbort means a stage already recorded its own failure and set the
+    // run status — nothing more to do. Anything else is ours to report, and we
+    // restore the run to whatever it was rather than degrading it to 'failed'
+    // over what is, from the account's perspective, a low-stakes rewrite.
+    if (err instanceof StageAbort) return;
+    const message = err instanceof Error ? err.message : String(err);
+    await updateRun(runId, {
+      status: previousStatus,
+      error: message,
+      completed_at: new Date().toISOString(),
+    });
+    throw err;
+  } finally {
+    await syncProspect(runId);
+  }
+}
+
 /** Can this run's analysis be retried without redoing the research? */
 export async function canRetryAnalysis(runId: string): Promise<boolean> {
   const run = await getRun(runId);
@@ -317,6 +376,108 @@ async function rehydrate(runId: string): Promise<PipelineContext> {
       fetch_status: (r.fetch_status ?? 'snippet_only') as NormalizedSource['fetch_status'],
     }),
   );
+
+  return ctx;
+}
+
+/**
+ * `rehydrate()` plus the ALREADY-SELECTED hook — for a message-only
+ * regenerate, which must not re-derive it from a fresh model pass the way
+ * `retryAnalysis()`'s `evaluateSignalsStage()` would.
+ *
+ * The hook is restored from the persisted `select_hook` stage's own output,
+ * not the `signals` table — that table does not store `signal_level` /
+ * `role_relevance` / `outreach_rationale` (a pre-existing schema gap, out of
+ * scope here), while `select_hook`'s output already embeds every field those
+ * checks actually read (see selectHookStage's `output.selected`). `ctx.ranked`
+ * and `ctx.analysis` are filled in only with fields something downstream of
+ * this path genuinely reads (verified against generateMessageStage,
+ * regenerateMessage, validateClaims and readyForReviewStage directly) — never
+ * guessed values presented to the user as if they were real research output.
+ */
+async function rehydrateForMessageRegeneration(runId: string): Promise<PipelineContext> {
+  const ctx = await rehydrate(runId);
+
+  const hookStage = await getStage(runId, 'select_hook');
+  const hookOutput = hookStage?.output as Record<string, unknown> | null;
+  const selected = (hookOutput?.selected as Record<string, unknown> | null) ?? null;
+  if (!selected) return ctx; // ctx.hook stays null; the caller reports this as the precondition failure it is
+
+  const draft = await getDraft(runId);
+  const genStage = await getStage(runId, 'generate_message');
+  const genOutput = genStage?.output as Record<string, unknown> | null;
+
+  const hook: ScoredSignal = {
+    signal: String(selected.signal ?? ''),
+    why_it_matters: String(selected.why_it_matters ?? ''),
+    // Not read anywhere in this path (only used upstream, during signal
+    // extraction/ranking, which this path deliberately does not redo).
+    category: 'other',
+    source_title: String(selected.source_title ?? ''),
+    source_url: String(selected.source_url ?? ''),
+    published_date: (selected.published_date as string | null) ?? null,
+    supporting_quote: String(selected.supporting_quote ?? ''),
+    relevance_score: 0,
+    specificity_score: 0,
+    confidence_score: 0,
+    conflicts_with: null,
+    signal_level: selected.signal_level === 'COMPANY' ? 'COMPANY' : 'PERSON',
+    role_relevance: (selected.role_relevance as string | null) ?? null,
+    outreach_rationale: (selected.outreach_rationale as string | null) ?? null,
+    related_capability_id: null,
+    source_type: 'web',
+    evidence_level: String(selected.evidence_level ?? 'SNIPPET'),
+    credibility_score: 0,
+    recency_score: 0,
+    corroboration_count: 0,
+    composite_score: Number(selected.composite_score ?? 0),
+    retrieved_at: (selected.published_date as string | null) ?? new Date().toISOString(),
+  };
+
+  ctx.hook = hook;
+  // The only other consumer of `ctx.ranked` on this path is validateClaims(),
+  // which declares an `evidence` parameter but never actually reads it — see
+  // lib/validation/factcheck.ts. The hook itself is the one genuine piece of
+  // evidence this path has without re-running signal extraction.
+  ctx.ranked = [hook];
+  ctx.hookSignalId = draft?.hook_signal_id ?? null;
+
+  ctx.analysis = {
+    // Not read anywhere downstream of this path — analyzeProspect() is called
+    // with the profile/sources/hints directly, not through ctx.analysis.prospect.
+    prospect: {
+      name: null,
+      headline: null,
+      currentCompany: null,
+      currentRole: null,
+      location: null,
+      identityConfidence: 0,
+      identityNotes: null,
+      ambiguous: false,
+      employerChangeNote: null,
+    },
+    summary: '',
+    careerInsights: [],
+    companyContext: [],
+    personalizationHooks: [],
+    painPointsOrInterests: [],
+    selectedHookIndex: 0,
+    hookReason: '',
+    alternativesConsidered: [],
+    insufficientEvidence: false,
+    insufficientReason: null,
+    // Real, previously-generated values, carried forward from the run's own
+    // prior output — a message-only regenerate keeps the same angle and
+    // subject line unless the fresh rewrite changes them.
+    outreachAngle: String(genOutput?.outreach_angle ?? ''),
+    suggestedSubject: String(genOutput?.subject ?? draft?.subject ?? ''),
+    suggestedMessage: draft?.message_text ?? '',
+    // Overwritten unconditionally by regenerateMessage() on success; only
+    // matters here as a safe fallback if that call is never reached.
+    messageClaims: [],
+    confidence: Number(hookOutput?.confidence ?? 0),
+    informationRequests: (genOutput?.information_requests as string[] | undefined) ?? [],
+  };
 
   return ctx;
 }

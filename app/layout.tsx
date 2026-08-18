@@ -24,7 +24,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
               <Link href="/history" className="hover:text-indigo-600">History</Link>
               <Link href="/evaluation" className="hover:text-indigo-600">Evaluation</Link>
               <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500">
-                Nothing is ever sent
+                Human review only
               </span>
               {user ? (
                 <form action="/auth/signout" method="post" className="flex items-center gap-2">

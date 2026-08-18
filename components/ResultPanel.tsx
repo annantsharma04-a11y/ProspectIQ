@@ -8,6 +8,7 @@ import { IdentityCard } from './IdentityCard';
 import { ContactCandidates } from './ContactCandidates';
 import type { RunSnapshot } from '@/lib/types';
 import { deriveOutreachStatus, OUTREACH_LABEL } from '@/lib/qualification/outreach-status';
+import type { QualificationAction } from '@/lib/qualification/types';
 
 interface HookStageOutput {
   selected: {
@@ -153,6 +154,30 @@ const QUAL_TONE: Record<string, string> = {
 };
 
 /**
+ * One line per matrix cell, shown as the qualification decision. Two of
+ * these (the EXPLORATORY_* actions) still `proceed`, but never say "target
+ * directly" — a BORDERLINE company earns cautious, discovery-oriented
+ * outreach at most, never a confident pitch.
+ */
+const ACTION_LABEL: Record<QualificationAction, string> = {
+  TARGET_DIRECTLY: 'Proceed — target directly.',
+  VERIFY_BETTER_CONTACT: 'Do not pitch yet — verify this contact’s connection to the workflow, or find a better one.',
+  FIND_BETTER_CONTACT: 'Do not pitch this contact — find a better contact at this company.',
+  EXPLORATORY_OUTREACH:
+    'Proceed cautiously — exploratory outreach only, asking rather than assuming the workflow exists.',
+  EXPLORATORY_OUTREACH_IF_SIGNAL:
+    'Proceed only if a genuinely verified signal is found — cautious, exploratory outreach, not a confident pitch.',
+  FIND_BETTER_CONTACT_OR_HOLD:
+    'Hold — company fit is unconfirmed. A human may look for a better contact or wait for stronger signal.',
+  DO_NOT_CONTACT: 'Do not contact — the available evidence does not establish sufficient fit.',
+};
+
+/** True for the two matrix cells where a BORDERLINE company still proceeds. */
+function isExploratory(action: QualificationAction): boolean {
+  return action === 'EXPLORATORY_OUTREACH' || action === 'EXPLORATORY_OUTREACH_IF_SIGNAL';
+}
+
+/**
  * Whether this person at this company is worth contacting at all — shown before
  * any signal or hook, because it is the first question the product asks.
  */
@@ -178,8 +203,13 @@ function QualificationCard({ snapshot }: { snapshot: RunSnapshot }) {
 
       <div className={`rounded-lg border p-3 ${QUAL_TONE[q.classification] ?? QUAL_TONE.BORDERLINE}`}>
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <span className="text-sm font-semibold uppercase tracking-wider">
+          <span className="flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider">
             {q.classification.replace(/_/g, ' ')}
+            {isExploratory(q.action) ? (
+              <span className="rounded-full bg-white/60 px-1.5 py-0.5 text-[10px] font-medium normal-case tracking-normal text-amber-900">
+                exploratory outreach
+              </span>
+            ) : null}
           </span>
           <span className="text-xs tabular-nums opacity-80">overall fit {q.overall_fit}/100</span>
         </div>
@@ -309,9 +339,7 @@ function QualificationCard({ snapshot }: { snapshot: RunSnapshot }) {
 
       <p className="mt-3 border-t border-slate-100 pt-2 text-xs text-slate-600">
         <span className="font-medium text-slate-700">Decision: </span>
-        {q.proceed
-          ? 'Proceed to research-driven outreach.'
-          : 'Do not pitch — the available evidence does not establish sufficient fit between this prospect/company and the configured capabilities.'}
+        {ACTION_LABEL[q.action]}
       </p>
     </div>
   );
@@ -569,7 +597,13 @@ export function ResultPanel({
 
       {/* Draft + human review */}
       {draft ? (
-        <DraftReviewCard runId={run.id} draft={draft} onReviewed={onChange} />
+        // Keyed on the draft's own id: a regenerated draft is a delete+insert
+        // (the same pattern generate_message always used), so a genuinely new
+        // draft arrives with a new id — remounting on that id is what makes a
+        // freshly regenerated message replace stale local component state
+        // (the in-progress edit text, the approve/reject outcome) instead of
+        // leaving the old draft's state visible under the new draft's data.
+        <DraftReviewCard key={draft.id} runId={run.id} run={run} draft={draft} onReviewed={onChange} />
       ) : inProgress ? (
         <p className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-500">
           No draft yet — the pipeline is still running.

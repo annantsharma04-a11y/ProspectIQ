@@ -32,7 +32,7 @@ export async function RecentRuns({ limit = 6 }: { limit?: number }) {
           Recent runs
         </h2>
         <p className="rounded-lg border border-dashed border-slate-200 px-3 py-4 text-xs leading-relaxed text-slate-500">
-          No runs yet. Analyze a prospect and the fifteen pipeline stages will report here as they
+          No runs yet. Analyze a prospect and the 14 pipeline stages will report here as they
           execute.
         </p>
       </div>

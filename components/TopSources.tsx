@@ -7,6 +7,7 @@ import {
   displayDate,
   rankSources,
   topSources,
+  type ProspectContext,
   type RankedSource,
   type ResearchStage,
 } from '@/lib/research/top-sources';
@@ -34,14 +35,17 @@ export function TopSources({
   sources,
   signals,
   stage,
+  prospect,
 }: {
   sources: SourceRow[];
   signals: SignalRow[];
   stage: ResearchStage;
+  /** Gates research_prospect sources to ones actually about this person — see mentionsProspect(). */
+  prospect?: ProspectContext;
 }) {
   const [expanded, setExpanded] = useState(false);
 
-  const ranked = rankSources(sources, stage, signals);
+  const ranked = rankSources(sources, stage, signals, new Date(), prospect);
   const shown = expanded ? ranked : topSources(ranked, SHOWN);
 
   if (ranked.length === 0) {
@@ -57,7 +61,9 @@ export function TopSources({
       <p className="mb-2 text-xs text-slate-500">
         {stage === 'research_prospect'
           ? 'Sources about the person: their role, public activity, interviews and posts.'
-          : 'Sources about company developments: funding, launches, hiring, partnerships and strategy.'}
+          : stage === 'research_company'
+            ? 'Sources about company developments: funding, launches, hiring, partnerships and strategy.'
+            : 'The complete, deduplicated evidence set — person and company sources together. The AI analysis cannot cite anything outside this list.'}
       </p>
 
       <ul className="space-y-2">

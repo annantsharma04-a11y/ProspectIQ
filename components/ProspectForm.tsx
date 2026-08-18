@@ -190,8 +190,8 @@ export function ProspectForm() {
 
       <p className="text-xs leading-relaxed text-slate-500">
         Public profile data is retrieved through a compliant provider and combined with public web
-        and news research. Nothing is accessed behind a login, and nothing is ever sent to the
-        prospect.
+        and news research. Nothing is accessed behind a login, and outreach is always sent
+        manually.
       </p>
     </form>
   );

@@ -119,7 +119,7 @@ export function strengthHighlights(input: EvaluationInput, w: Window): Highlight
 
   // Always true of the product, not a measurement that could drift.
   out.push({
-    claim: 'Every generated message is held for human review. No outreach is ever sent.',
+    claim: 'Every generated message is held for human review. Outreach is always sent manually.',
     basis: `${messages.generated} drafts produced in this window, ${messages.awaitingReview} awaiting review. The system has no sending capability of any kind.`,
     byConstruction: true,
   });

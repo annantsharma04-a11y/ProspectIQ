@@ -145,10 +145,10 @@ describe('highlights are gated on real data', () => {
     expect(h!.basis).toMatch(/enforced in code rather than observed/i);
   });
 
-  it('always states that outreach is never sent', () => {
+  it('always states that outreach is sent manually, never automatically', () => {
     const h = strengthHighlights(base(), W).find((x) => /human review/i.test(x.claim));
     expect(h).toBeDefined();
-    expect(h!.claim).toMatch(/No outreach is ever sent/i);
+    expect(h!.claim).toMatch(/outreach is always sent manually/i);
     expect(h!.byConstruction).toBe(true);
   });
 

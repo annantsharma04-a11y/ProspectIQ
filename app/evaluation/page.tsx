@@ -166,7 +166,7 @@ export default async function EvaluationPage({
             <p className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-slate-50 px-3 py-2.5 text-xs text-slate-600">
               <span className="font-semibold text-slate-800">Human review required.</span>
               <span>
-                Nothing is ever sent. {messages.generated} drafts in this window,{' '}
+                Outreach is always sent manually. {messages.generated} drafts in this window,{' '}
                 {messages.awaitingReview} awaiting a person&rsquo;s decision.
               </span>
               <InfoTip label="human review" definition={OVERVIEW_DEFINITIONS['Human review']} />

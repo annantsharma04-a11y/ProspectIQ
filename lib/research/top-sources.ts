@@ -17,9 +17,25 @@
 //      not first retrieved.
 
 import { hostOf, isSameSource } from '@/lib/url-identity';
+import { titleTokens } from '@/lib/research/normalize';
 import type { SignalRow, SourceRow } from '@/lib/types';
 
-export type ResearchStage = 'research_prospect' | 'research_company';
+export type ResearchStage = 'research_prospect' | 'research_company' | 'collect_signals';
+
+/**
+ * Which pipeline stages need `sources`/`signals` rows fetched to render their
+ * detail page at all.
+ *
+ * A stage detail page that forgets this reads `sources: []` no matter how
+ * many rows the run actually has — TopSources then reports "No sources
+ * retrieved" for a genuinely populated evidence set, which looks like a data
+ * bug but is really a page never having asked for the data. Named and
+ * exported so that decision has exactly one place to be right, and can be
+ * tested directly rather than only discovered by loading a page.
+ */
+export function stageNeedsSources(stage: string): stage is ResearchStage {
+  return stage === 'research_prospect' || stage === 'research_company' || stage === 'collect_signals';
+}
 
 export type EvidenceKind = 'full' | 'snippet' | 'unavailable';
 
@@ -40,6 +56,10 @@ export interface RankedSource {
 
 /** Does this source belong to the person stage or the company stage? */
 export function belongsToStage(source: SourceRow, stage: ResearchStage): boolean {
+  // collect_signals consolidates BOTH prospect and company research into one
+  // deduplicated evidence set — nothing to filter by prefix, everything found
+  // so far belongs to it.
+  if (stage === 'collect_signals') return true;
   const prefix = stage === 'research_prospect' ? 'prospect' : 'company';
   return (source.found_via ?? []).some((c) => c.toLowerCase().startsWith(prefix));
 }
@@ -102,8 +122,49 @@ function scoreOf(s: SourceRow, usedAsEvidence: boolean, now: Date): number {
   );
 }
 
+/** The prospect a research_prospect list is being ranked for. */
+export interface ProspectContext {
+  name: string | null;
+  /** LinkedIn slug — the profile itself, and any post URL embedding it, is relevant by construction. */
+  slug: string | null;
+}
+
+/**
+ * Is this source actually about the prospect — not just found by a query
+ * scoped to them?
+ *
+ * A source's `found_via` category proves it was FOUND BY a prospect-scoped
+ * search query, never that its content is about this person. Search
+ * providers sometimes pad a thin result set with generic, highly-credible,
+ * currently-trending stories that have nothing to do with the prospect at
+ * all (a royal interview, a phone launch date) — those still carry high
+ * credibility and would otherwise rank above genuinely relevant coverage.
+ * This is the deterministic gate that keeps them out: every distinctive
+ * token of the prospect's name must appear in the source's own title,
+ * snippet or content, or the source's URL must be their own LinkedIn slug.
+ */
+export function mentionsProspect(source: SourceRow, prospect: ProspectContext): boolean {
+  const nameTokens = prospect.name ? titleTokens(prospect.name) : new Set<string>();
+  if (nameTokens.size === 0) return true; // nothing to check the source against — do not exclude blindly
+
+  if (prospect.slug) {
+    const url = (source.canonical_url || source.url).toLowerCase();
+    if (url.includes(`/in/${prospect.slug.toLowerCase()}`)) return true;
+  }
+
+  const body = `${source.title ?? ''} ${source.snippet ?? ''} ${source.content ?? ''}`;
+  const bodyTokens = titleTokens(body);
+  return [...nameTokens].every((t) => bodyTokens.has(t));
+}
+
 /**
  * Rank a stage's sources, best first.
+ *
+ * For `research_prospect`, sources are also gated by `mentionsProspect()`
+ * when a prospect is supplied — credibility and freshness alone are not
+ * relevance, and ranking by those alone is exactly what let a generic
+ * high-authority story about someone else outrank real coverage of the
+ * actual person (see mentionsProspect's doc comment).
  *
  * Ties break on canonical_url so the order is stable across renders — a list
  * that reshuffles between page loads is not a ranking.
@@ -113,11 +174,13 @@ export function rankSources(
   stage: ResearchStage,
   signals: SignalRow[] = [],
   now: Date = new Date(),
+  prospect?: ProspectContext,
 ): RankedSource[] {
   const evidenceUrls = signals.map((sig) => sig.source_url).filter(Boolean);
 
   return sources
     .filter((s) => belongsToStage(s, stage))
+    .filter((s) => stage !== 'research_prospect' || !prospect || mentionsProspect(s, prospect))
     .map((s): RankedSource => {
       const usedAsEvidence = evidenceUrls.some((u) => isSameSource(u, s.canonical_url || s.url));
       return {
@@ -167,10 +230,33 @@ export function topSources(ranked: RankedSource[], limit = 4): RankedSource[] {
   return picked;
 }
 
-/** Human date for display. Returns null rather than inventing one. */
+/**
+ * Human date for display. Returns null rather than inventing one.
+ *
+ * Locale is pinned explicitly rather than left as `undefined` — an ambient
+ * locale is read from wherever the code happens to run, which is the
+ * server's locale during SSR and the browser's during hydration. Those
+ * disagreeing ("Apr 3, 2026" vs "3 Apr 2026") is a real hydration mismatch,
+ * not a cosmetic one: React discards and re-renders the whole subtree when
+ * server and client text disagree.
+ */
 export function displayDate(published: string | null): string | null {
   if (!published) return null;
   const d = new Date(published);
   if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+/**
+ * Look up the persisted source a citation URL refers to, by identity (not
+ * string equality — the same source can be cited via different LinkedIn
+ * locale subdomains or tracking params).
+ *
+ * Returns null when the URL is not among this run's persisted sources —
+ * callers must treat that as "nothing to show", never fall back to
+ * displaying the bare cited string as if it were a verified source.
+ */
+export function findSourceByUrl(sources: SourceRow[], url: string | null | undefined): SourceRow | null {
+  if (!url) return null;
+  return sources.find((s) => isSameSource(s.url, url) || isSameSource(s.canonical_url, url)) ?? null;
 }

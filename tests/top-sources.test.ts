@@ -3,7 +3,10 @@ import {
   belongsToStage,
   displayDate,
   evidenceKindOf,
+  findSourceByUrl,
+  mentionsProspect,
   rankSources,
+  stageNeedsSources,
   topSources,
 } from '@/lib/research/top-sources';
 import type { SignalRow, SourceRow } from '@/lib/types';
@@ -240,5 +243,178 @@ describe('missing metadata is shown as missing, never invented', () => {
     const url = 'https://economictimes.com/article?id=7';
     const ranked = rankSources([source({ url })], 'research_company', [], NOW);
     expect(ranked[0].source.url).toBe(url);
+  });
+});
+
+// ─── regression: research_prospect must not surface generic, unrelated ──────
+// high-credibility news over real coverage of the person. Live case: a
+// Kannan Ganesan (Myntra CFO) run's `prospect_activity` search padded a thin
+// result set with a BBC "King Charles, Starmer and Iran" video and a Forbes
+// "iPhone 18 Pro" article — both real, both genuinely retrieved, both scored
+// 0.9 credibility (BBC/Forbes are high-authority domains), so pure
+// credibility/freshness ranking put them ABOVE the actual CFO-appointment
+// coverage. Neither has anything to do with Kannan Ganesan.
+
+describe('research_prospect excludes sources unrelated to the actual person (Kannan Ganesan regression)', () => {
+  const bbcNoise = source({
+    found_via: ['prospect_activity'],
+    credibility: 0.9,
+    fetch_status: 'scraped',
+    title: 'King Charles, Starmer and Iran: My five-minute interview with Trump - BBC',
+    snippet: null,
+    url: 'https://www.bbc.com/news/videos/c624yr5p3kpo',
+  });
+  const forbesNoise = source({
+    found_via: ['prospect_activity'],
+    credibility: 0.9,
+    fetch_status: 'scraped',
+    title: "Here's When Apple Will Reveal Its iPhone 18 Pro Special Event - Forbes",
+    snippet: null,
+    url: 'https://www.forbes.com/sites/x/heres-when-apple-will-reveal-its-iphone-18-pro',
+  });
+  const cfoAppointment = source({
+    found_via: ['prospect_company'],
+    credibility: 0.45,
+    fetch_status: 'scraped',
+    title: 'Myntra appoints Kannan Ganesan as Chief Financial Officer',
+    snippet: 'Kannan Ganesan joins Myntra as CFO, succeeding Abhishek Gupta.',
+    url: 'https://www.peoplematters.in/news/appointments/myntra-appoints-kannan-ganesan-as-cfo',
+  });
+  const linkedinProfile = source({
+    found_via: ['prospect_identity'],
+    credibility: 0.6,
+    fetch_status: 'scraped',
+    title: 'Kannan Ganesan — LinkedIn profile',
+    snippet: null,
+    url: 'https://www.linkedin.com/in/kannan-ganesan-0368408',
+  });
+
+  const prospect = { name: 'Kannan Ganesan', slug: 'kannan-ganesan-0368408' };
+
+  it('excludes the unrelated high-credibility sources entirely', () => {
+    expect(mentionsProspect(bbcNoise, prospect)).toBe(false);
+    expect(mentionsProspect(forbesNoise, prospect)).toBe(false);
+  });
+
+  it('keeps sources that actually name the person', () => {
+    expect(mentionsProspect(cfoAppointment, prospect)).toBe(true);
+  });
+
+  it("keeps the person's own LinkedIn profile even though the title alone doesn't repeat the full name distinctively", () => {
+    expect(mentionsProspect(linkedinProfile, prospect)).toBe(true);
+  });
+
+  it('rankSources() for research_prospect drops the noise and ranks real coverage instead', () => {
+    const ranked = rankSources(
+      [bbcNoise, forbesNoise, cfoAppointment, linkedinProfile],
+      'research_prospect',
+      [],
+      NOW,
+      prospect,
+    );
+    const urls = ranked.map((r) => r.source.url);
+    expect(urls).not.toContain(bbcNoise.url);
+    expect(urls).not.toContain(forbesNoise.url);
+    expect(urls).toContain(cfoAppointment.url);
+    expect(urls).toContain(linkedinProfile.url);
+  });
+
+  it('without a prospect context, falls back to the prior unfiltered behavior (backward compatible)', () => {
+    const ranked = rankSources([bbcNoise, forbesNoise, cfoAppointment], 'research_prospect', [], NOW);
+    expect(ranked.map((r) => r.source.url)).toContain(bbcNoise.url);
+  });
+
+  it('does not gate research_company sources by the prospect at all', () => {
+    const companyNoise = source({ found_via: ['company_news'], title: 'Unrelated company news' });
+    const ranked = rankSources([companyNoise], 'research_company', [], NOW, prospect);
+    expect(ranked).toHaveLength(1);
+  });
+
+  it('a name with no matching tokens anywhere in a real source is excluded too, not just obviously unrelated ones', () => {
+    const wrongPerson = source({
+      found_via: ['prospect_activity'],
+      title: 'Seema Verma Appointed as Chief Executive Officer at eDAS',
+      snippet: null,
+    });
+    expect(mentionsProspect(wrongPerson, prospect)).toBe(false);
+  });
+});
+
+// ─── regression: the stage detail PAGE must actually fetch sources for ──────
+// collect_signals, or TopSources always renders "No sources retrieved" no
+// matter how many rows the run has. Live case: /runs/[id]/stages/collect_
+// signals showed "49 sources ready" in the summary text (from the stage's
+// OWN recorded output) right above a "No sources retrieved" TopSources card —
+// because the page's data-fetching only requested `listSources`/`listSignals`
+// for research_prospect/research_company, never for collect_signals, so
+// `sources`/`signals` were hardcoded to `[]` regardless of what existed.
+
+describe('stageNeedsSources — which stage pages must fetch sources/signals', () => {
+  it('requires sources for both research stages and collect_signals', () => {
+    expect(stageNeedsSources('research_prospect')).toBe(true);
+    expect(stageNeedsSources('research_company')).toBe(true);
+    expect(stageNeedsSources('collect_signals')).toBe(true);
+  });
+
+  it('does not require sources for stages whose detail is fully self-contained in their own output', () => {
+    for (const stage of ['validate_input', 'identify_prospect', 'qualify_prospect', 'select_hook', 'generate_message', 'validate_claims', 'ready_for_review']) {
+      expect(stageNeedsSources(stage)).toBe(false);
+    }
+  });
+});
+
+describe('collect_signals shows the full consolidated evidence set', () => {
+  it('includes sources found via either the prospect or the company research', () => {
+    const prospectSource = source({ found_via: ['prospect_activity'] });
+    const companySource = source({ found_via: ['company_news'] });
+    expect(belongsToStage(prospectSource, 'collect_signals')).toBe(true);
+    expect(belongsToStage(companySource, 'collect_signals')).toBe(true);
+  });
+
+  it('includes a source with no found_via category at all', () => {
+    const bare = source({ found_via: [] });
+    expect(belongsToStage(bare, 'collect_signals')).toBe(true);
+  });
+
+  it('ranks and marks "used as evidence" exactly like the research stages do', () => {
+    const used = source({ found_via: ['prospect_activity'] });
+    const unused = source({ found_via: ['company_news'] });
+    const ranked = rankSources([used, unused], 'collect_signals', [signal(used.url)], NOW);
+    expect(ranked).toHaveLength(2);
+    expect(ranked.find((r) => r.source.id === used.id)?.usedAsEvidence).toBe(true);
+    expect(ranked.find((r) => r.source.id === unused.id)?.usedAsEvidence).toBe(false);
+  });
+});
+
+// ─── per-signal source lookup (evaluate_signals candidate list) ────────────────
+
+describe('findSourceByUrl — resolving a citation back to its persisted source', () => {
+  it('finds the source by exact URL match', () => {
+    const s = source({ url: 'https://a.com/article' });
+    expect(findSourceByUrl([s], 'https://a.com/article')).toBe(s);
+  });
+
+  it('matches through identity, not string equality (locale subdomain, tracking params)', () => {
+    const s = source({
+      url: 'https://www.linkedin.com/in/jane-doe',
+      canonical_url: 'https://www.linkedin.com/in/jane-doe',
+    });
+    expect(findSourceByUrl([s], 'https://sg.linkedin.com/in/jane-doe?trk=public_profile')).toBe(s);
+  });
+
+  it('returns null for a URL not among this run\'s persisted sources — never invents one', () => {
+    const s = source({ url: 'https://a.com/article' });
+    expect(findSourceByUrl([s], 'https://not-retrieved.example.com/x')).toBeNull();
+  });
+
+  it('returns null for a missing or empty URL', () => {
+    const s = source({ url: 'https://a.com/article' });
+    expect(findSourceByUrl([s], null)).toBeNull();
+    expect(findSourceByUrl([s], undefined)).toBeNull();
+    expect(findSourceByUrl([s], '')).toBeNull();
+  });
+
+  it('returns null against an empty source list', () => {
+    expect(findSourceByUrl([], 'https://a.com/article')).toBeNull();
   });
 });

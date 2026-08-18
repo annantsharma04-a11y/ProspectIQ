@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   STAGE_LABELS,
   type RunRow,
@@ -13,6 +14,8 @@ import { TopSources } from './TopSources';
 import { ContactCandidates } from './ContactCandidates';
 import type { ContactCandidateRow } from '@/lib/contacts/types';
 import type { EvidenceItem } from '@/lib/qualification/types';
+import { findSourceByUrl, displayDate } from '@/lib/research/top-sources';
+import { hostOf } from '@/lib/url-identity';
 
 // Human-readable stage explanations.
 //
@@ -51,7 +54,7 @@ const PURPOSE: Record<StageName, string> = {
   validate_claims:
     'Checks every factual statement in the draft against the collected evidence, distinguishing claims about the prospect from claims about your own product.',
   ready_for_review:
-    'Finalises the run and hands it to a human. Nothing is sent automatically.',
+    'Finalises the run and hands it to a human. Outreach is always sent manually.',
 };
 
 const STATUS_STYLE: Record<string, string> = {
@@ -93,6 +96,20 @@ const QUAL_TONE: Record<string, string> = {
   NOT_QUALIFIED: 'border-slate-300 bg-slate-50 text-slate-800',
 };
 
+/** One line per qualification decision-matrix cell — see lib/qualification/types.ts's QualificationAction. */
+const ACTION_LABEL: Record<string, string> = {
+  TARGET_DIRECTLY: 'Proceed — target directly.',
+  VERIFY_BETTER_CONTACT: 'Do not pitch yet — verify this contact’s connection to the workflow, or find a better one.',
+  FIND_BETTER_CONTACT: 'Do not pitch this contact — find a better contact at this company.',
+  EXPLORATORY_OUTREACH:
+    'Proceed cautiously — exploratory outreach only, asking rather than assuming the workflow exists.',
+  EXPLORATORY_OUTREACH_IF_SIGNAL:
+    'Proceed only if a genuinely verified signal is found — cautious, exploratory outreach, not a confident pitch.',
+  FIND_BETTER_CONTACT_OR_HOLD:
+    'Hold — company fit is unconfirmed. A human may look for a better contact or wait for stronger signal.',
+  DO_NOT_CONTACT: 'Do not contact — the available evidence does not establish sufficient fit.',
+};
+
 function get<T>(o: Output | null, path: string): T | undefined {
   if (!o) return undefined;
   return path.split('.').reduce<unknown>((acc, k) => (acc as Output)?.[k], o) as T | undefined;
@@ -129,6 +146,117 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">{title}</h3>
       {children}
     </section>
+  );
+}
+
+/**
+ * A compact "which source backs this" line for an individual signal — title,
+ * domain, date, and a clickable link, exactly the fields TopSources shows,
+ * just for one item rather than a ranked list. Only ever called with a
+ * `SourceRow` already resolved from this run's persisted sources — never
+ * with a bare, unverified URL string.
+ */
+function SourceLine({ source }: { source: SourceRow }) {
+  const date = displayDate(source.published_date);
+  const domain = hostOf(source.canonical_url || source.url);
+  const title = source.title?.trim();
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-slate-100 pt-2 text-xs">
+      <a
+        href={source.url}
+        target="_blank"
+        rel="noopener noreferrer nofollow"
+        className="min-w-0 truncate font-medium text-indigo-700 hover:underline"
+      >
+        {title || 'Open source'}
+      </a>
+      {domain && <span className="text-slate-400">· {domain}</span>}
+      {date && <span className="text-slate-400">· {date}</span>}
+      <a
+        href={source.url}
+        target="_blank"
+        rel="noopener noreferrer nofollow"
+        className="ml-auto shrink-0 font-medium text-slate-500 hover:text-indigo-600 hover:underline"
+      >
+        Open ↗
+      </a>
+    </div>
+  );
+}
+
+/**
+ * The same "Regenerate message" action the main run page offers on the draft
+ * card, reused here (same POST route, same `regenerateMessageOnly()` backend
+ * — nothing about the generation is duplicated) so it is also available from
+ * the stage detail page itself.
+ *
+ * This page has no live subscription of its own (unlike the main run page's
+ * LiveRunView), so "show the new draft immediately" is done by polling the
+ * run's own status after the fire-and-forget POST settles, then asking the
+ * server component that owns this page to re-fetch via `router.refresh()` —
+ * which pulls in the regenerated stage's freshly persisted `output`.
+ */
+function RegenerateMessageButton({ runId }: { runId: string }) {
+  const router = useRouter();
+  const [state, setState] = useState<'idle' | 'working' | 'error'>('idle');
+  const [error, setError] = useState<string | null>(null);
+
+  async function regenerate() {
+    setState('working');
+    setError(null);
+    try {
+      const res = await fetch(`/api/runs/${runId}/regenerate-message`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? 'Could not start regeneration.');
+
+      // Poll for the background job to settle — up to a minute — then refresh.
+      for (let attempt = 0; attempt < 40; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const check = await fetch(`/api/runs/${runId}`, { cache: 'no-store' });
+        if (!check.ok) continue;
+        const snapshot = await check.json();
+        if (snapshot.run?.status === 'running') continue;
+
+        // error is explicitly cleared on success and explicitly set on
+        // failure by regenerateMessageOnly() — never stale from before this
+        // attempt, since it is also explicitly cleared the moment it starts.
+        if (snapshot.run?.error) {
+          setError(snapshot.run.error as string);
+          setState('error');
+        } else {
+          setState('idle');
+        }
+        router.refresh();
+        return;
+      }
+      setError('Regeneration is taking longer than expected — refresh the page to check.');
+      setState('error');
+    } catch (err) {
+      setState('error');
+      setError(err instanceof Error ? err.message : 'Something went wrong.');
+    }
+  }
+
+  return (
+    <div className="mb-3">
+      <button
+        type="button"
+        onClick={regenerate}
+        disabled={state === 'working'}
+        className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+      >
+        {state === 'working' ? 'Regenerating…' : 'Regenerate message'}
+      </button>
+      {state === 'working' && (
+        <p className="mt-1.5 rounded-lg bg-indigo-50 px-2.5 py-1.5 text-xs text-indigo-800">
+          Writing a new version of this message — same selected hook and evidence, new wording. This
+          keeps the current draft until the new one is validated.
+        </p>
+      )}
+      {error && (
+        <p className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-700">{error}</p>
+      )}
+    </div>
   );
 }
 
@@ -392,7 +520,16 @@ function StageBody({
             )}
           </Section>
           <Section title="Top sources">
-            <TopSources sources={sources} signals={signals} stage={name} />
+            <TopSources
+              sources={sources}
+              signals={signals}
+              stage={name}
+              prospect={
+                name === 'research_prospect'
+                  ? { name: run.prospect_name ?? run.input_name, slug: run.linkedin_slug }
+                  : undefined
+              }
+            />
           </Section>
           <Section title="Why it matters">
             <p className="text-sm text-slate-700">
@@ -661,8 +798,13 @@ function StageBody({
             <Section title="Target qualification">
               <div className={`rounded-lg border p-4 ${QUAL_TONE[status] ?? QUAL_TONE.BORDERLINE}`}>
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <span className="text-sm font-semibold uppercase tracking-wider">
+                  <span className="flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider">
                     {status.replace(/_/g, ' ')}
+                    {tq.action === 'EXPLORATORY_OUTREACH' || tq.action === 'EXPLORATORY_OUTREACH_IF_SIGNAL' ? (
+                      <span className="rounded-full bg-white/60 px-1.5 py-0.5 text-[10px] font-medium normal-case tracking-normal text-amber-900">
+                        exploratory outreach
+                      </span>
+                    ) : null}
                   </span>
                   <span className="text-sm tabular-nums opacity-80">
                     overall fit {String(tq.overall_fit)}/100
@@ -671,6 +813,11 @@ function StageBody({
                 <p className="mt-1.5 text-sm">{String(tq.reason ?? '')}</p>
                 {tq.suggestion ? (
                   <p className="mt-2 text-sm opacity-90">{String(tq.suggestion)}</p>
+                ) : null}
+                {tq.action ? (
+                  <p className="mt-2 text-xs font-medium opacity-90">
+                    {ACTION_LABEL[String(tq.action)] ?? ''}
+                  </p>
                 ) : null}
               </div>
               <p className="mt-2 text-xs text-slate-500">
@@ -743,6 +890,9 @@ function StageBody({
               <Stat label="Dated" value={String(get<number>(output, 'dated') ?? 0)} />
             </div>
           </Section>
+          <Section title="Sources in the evidence set">
+            <TopSources sources={sources} signals={signals} stage="collect_signals" />
+          </Section>
           <Section title="Why it matters">
             <p className="text-sm text-slate-700">
               This is the complete set of material the AI analysis is allowed to use. It cannot cite
@@ -780,6 +930,7 @@ function StageBody({
               <div className="space-y-2">
                 {ranked.map((r, i) => {
                   const c = r.components as Record<string, number>;
+                  const source = findSourceByUrl(sources, r.source_url as string | undefined);
                   return (
                     <div key={i} className="rounded-lg border border-slate-200 p-3">
                       <div className="flex items-start justify-between gap-3">
@@ -793,6 +944,9 @@ function StageBody({
                           <span key={k}>{k} {v}</span>
                         ))}
                       </div>
+                      {/* Only rendered when the citation resolves to a source this run
+                          actually retrieved and persisted — nothing here is invented. */}
+                      {source ? <SourceLine source={source} /> : null}
                     </div>
                   );
                 })}
@@ -878,20 +1032,41 @@ function StageBody({
                 ) : null}
 
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-indigo-700">Evidence</p>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-indigo-700">
+                    Source supporting this hook
+                  </p>
                   {selected.supporting_quote ? (
                     <blockquote className="mt-0.5 border-l-2 border-indigo-300 pl-2 text-sm italic text-slate-600">
                       “{String(selected.supporting_quote)}”
                     </blockquote>
                   ) : null}
-                  <a
-                    href={String(selected.source_url)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="mt-1 block break-all text-xs text-indigo-600 hover:underline"
-                  >
-                    {String(selected.source_title || selected.source_url)}
-                  </a>
+                  <div className="mt-1.5 rounded-lg border border-indigo-100 bg-white px-2.5 py-2">
+                    <a
+                      href={String(selected.source_url)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block break-words text-sm font-medium text-indigo-700 hover:underline"
+                    >
+                      {String(selected.source_title || selected.source_url)}
+                    </a>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
+                      <span className="truncate">{hostOf(String(selected.source_url ?? ''))}</span>
+                      {selected.published_date ? (
+                        <>
+                          <span aria-hidden>·</span>
+                          <span>{String(selected.published_date)}</span>
+                        </>
+                      ) : null}
+                      <a
+                        href={String(selected.source_url)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="ml-auto shrink-0 font-medium text-slate-500 hover:text-indigo-600 hover:underline"
+                      >
+                        Open ↗
+                      </a>
+                    </div>
+                  </div>
                 </div>
 
                 <div>
@@ -1032,6 +1207,7 @@ function StageBody({
       const opener = get<Output>(output, 'opener_check');
       return (
         <>
+          <RegenerateMessageButton runId={run.id} />
           <Section title="Draft produced">
             <dl>
               <Row label="Type" value={mode === 'personalized' ? 'Personalised (based on a verified hook)' : 'Conservative (no verified hook)'} />
@@ -1169,8 +1345,8 @@ function StageBody({
           </Section>
           <Section title="Why it matters">
             <p className="text-sm text-slate-700">
-              The run stops here. Nothing is sent automatically — a human reviews, edits and approves
-              the draft before it is ever used.
+              The run stops here. Outreach is always sent manually — a human reviews, edits and
+              approves the draft before it is ever used.
             </p>
           </Section>
         </>

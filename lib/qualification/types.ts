@@ -8,6 +8,8 @@
 export type FitClassification = 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN';
 export type AuthorityLevel = 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN';
 export type QualificationStatus = 'QUALIFIED' | 'BORDERLINE' | 'NOT_QUALIFIED';
+/** Independent three-state summary of ONE side alone — see companyFitState/prospectFitState. */
+export type FitState = 'QUALIFIED' | 'BORDERLINE' | 'NOT_QUALIFIED';
 
 export interface ProspectFit {
   score: number;
@@ -99,6 +101,22 @@ export interface CompanyFit {
   evidence_adjustment: string | null;
 }
 
+/**
+ * The seven actions the company-state × prospect-state decision matrix can
+ * select. Exists so the UI and tests switch on a fixed, exhaustive enum
+ * instead of pattern-matching prose — `classification`/`reason`/`suggestion`
+ * stay for human-readable display and backward compatibility, but `action`
+ * is the one true record of which matrix cell produced this decision.
+ */
+export type QualificationAction =
+  | 'TARGET_DIRECTLY'
+  | 'VERIFY_BETTER_CONTACT'
+  | 'FIND_BETTER_CONTACT'
+  | 'EXPLORATORY_OUTREACH'
+  | 'EXPLORATORY_OUTREACH_IF_SIGNAL'
+  | 'FIND_BETTER_CONTACT_OR_HOLD'
+  | 'DO_NOT_CONTACT';
+
 export interface TargetQualification {
   prospect_fit: ProspectFit;
   company_fit: CompanyFit;
@@ -109,13 +127,13 @@ export interface TargetQualification {
   proceed: boolean;
   /** Surfaced when the company fits but this person does not. */
   suggestion: string | null;
+  /** Which cell of the qualification decision matrix produced this outcome. */
+  action: QualificationAction;
 }
 
 /** Numeric floors. Deliberately explicit so a reviewer can see the bar. */
 export const PROSPECT_FIT_FLOOR = 45;
 export const COMPANY_FIT_FLOOR = 45;
-
-const RANK: Record<FitClassification, number> = { HIGH: 3, MEDIUM: 2, LOW: 1, UNKNOWN: 0 };
 
 /**
  * Enforce evidence discipline on company fit, in code.
@@ -257,126 +275,169 @@ export function applyProspectEvidenceDiscipline(fit: ProspectFit): ProspectFit {
 }
 
 /**
+ * Independent three-state summary of ONE side alone — company or prospect.
+ *
+ * QUALIFIED requires both a real score above the floor AND genuinely
+ * OBSERVED evidence. Without OBSERVED evidence a side is at best BORDERLINE,
+ * however high its score reads, because applyEvidenceDiscipline /
+ * applyProspectEvidenceDiscipline already cap an unevidenced side at its
+ * INFERRED_ONLY_CEILING before this ever runs — so "QUALIFIED" here can never
+ * mean "plausible but unconfirmed" wearing a passing score. UNKNOWN
+ * classification is folded into BORDERLINE for the same reason the old code
+ * held it for a human: "could not establish" is not the same as "confirmed
+ * fit", so it must never combine into QUALIFIED either.
+ */
+export function companyFitState(company: CompanyFit): FitState {
+  if (company.classification === 'LOW' || company.score < COMPANY_FIT_FLOOR) return 'NOT_QUALIFIED';
+  if (company.evidence_basis !== 'OBSERVED' || company.classification === 'UNKNOWN') return 'BORDERLINE';
+  return 'QUALIFIED';
+}
+
+/** Prospect-side counterpart to companyFitState() — identical reasoning. */
+export function prospectFitState(prospect: ProspectFit): FitState {
+  if (prospect.classification === 'LOW' || prospect.score < PROSPECT_FIT_FLOOR) return 'NOT_QUALIFIED';
+  if (prospect.evidence_basis !== 'OBSERVED' || prospect.classification === 'UNKNOWN') return 'BORDERLINE';
+  return 'QUALIFIED';
+}
+
+const FIND_BETTER_CONTACT_SUGGESTION =
+  'This person does not appear to own or influence the relevant workflows. Consider identifying a functional owner or decision-maker there instead.';
+
+const VERIFY_BETTER_CONTACT_SUGGESTION =
+  "This contact shows some relevant signal, but it isn't confirmed. Verify their connection to the qualified workflow, or consider identifying a different functional owner or decision-maker at the company.";
+
+function capitalize(s: string): string {
+  return s.length === 0 ? s : s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** Why a company landed in BORDERLINE rather than QUALIFIED — evidence-basis phrasing when a workflow was inferred, confidence phrasing when nothing could be established at all. */
+function companyBorderlineReason(company: CompanyFit): string {
+  return company.classification === 'UNKNOWN'
+    ? 'public information was insufficient to establish company relevance with confidence'
+    : 'company fit rests on inference from context rather than a directly observed workflow';
+}
+
+/** Prospect-side counterpart to companyBorderlineReason(). */
+function prospectBorderlineReason(prospect: ProspectFit): string {
+  return prospect.classification === 'UNKNOWN'
+    ? "public information was insufficient to establish this person's relevance with confidence"
+    : 'prospect fit rests on seniority and decision authority rather than an observed link to the qualified workflow';
+}
+
+/**
  * Combine the two fits into a decision, in code rather than in the model.
  *
- * The rules that matter:
- *   - A weak prospect is never rescued by a strong company, and vice versa.
- *     Outreach requires both sides to stand on their own.
- *   - UNKNOWN is not failure. It means we could not establish fit, which is a
- *     reason to ask a human rather than to guess — so it lands BORDERLINE.
- *   - Only QUALIFIED proceeds to hook selection and message generation.
+ * A company-state × prospect-state decision matrix, each side independently
+ * QUALIFIED / BORDERLINE / NOT_QUALIFIED (see companyFitState/
+ * prospectFitState). BORDERLINE never means qualified — it means plausible
+ * fit with insufficient confidence, and the only two cells where it still
+ * permits outreach (both under a BORDERLINE company) mark it explicitly as
+ * cautious and exploratory, never as a confident target.
+ *
+ *   Company \ Prospect   QUALIFIED              BORDERLINE                       NOT_QUALIFIED
+ *   QUALIFIED            target directly         verify / find better contact    find better contact
+ *   BORDERLINE           exploratory outreach     exploratory iff a verified      find better contact,
+ *                                                  signal survives review          or hold
+ *   NOT_QUALIFIED        do not contact           do not contact                   do not contact
+ *
+ * "Exploratory outreach" does not weaken evidence verification: it allows the
+ * pipeline to PROCEED to signal evaluation and hook selection, but every
+ * existing gate downstream — quote verification, capability evidence-backing
+ * — still applies unchanged. If nothing genuinely verified survives, no hook
+ * is selected and no message is drafted; the run simply lands in manual
+ * review instead of being blocked at the qualification gate itself. That is
+ * exactly how "only when a strong verified signal exists" is enforced for
+ * the doubly-borderline cell, without qualification needing to see signals
+ * it hasn't gathered yet.
  */
 export function combineQualification(
   prospect: ProspectFit,
   company: CompanyFit,
-): Pick<TargetQualification, 'overall_fit' | 'classification' | 'reason' | 'proceed' | 'suggestion'> {
+): Pick<TargetQualification, 'overall_fit' | 'classification' | 'reason' | 'proceed' | 'suggestion' | 'action'> {
   // The weaker side dominates: this is a minimum, not an average.
   const overall = Math.min(prospect.score, company.score);
+  const companyState = companyFitState(company);
+  const prospectState = prospectFitState(prospect);
 
-  const prospectWeak = prospect.classification === 'LOW' || prospect.score < PROSPECT_FIT_FLOOR;
-  const companyWeak = company.classification === 'LOW' || company.score < COMPANY_FIT_FLOOR;
-  const prospectUnknown = prospect.classification === 'UNKNOWN';
-  const companyUnknown = company.classification === 'UNKNOWN';
-
-  const suggestion =
-    !prospectWeak || companyWeak
-      ? null
-      : 'The company looks like a plausible fit, but this person does not appear to own or influence the relevant workflows. Consider identifying a functional owner or decision-maker there instead.';
-
-  if (prospectWeak && companyWeak) {
+  // Company NOT_QUALIFIED dominates regardless of the prospect — there is no
+  // account here to find a better contact at.
+  if (companyState === 'NOT_QUALIFIED') {
     return {
       overall_fit: overall,
       classification: 'NOT_QUALIFIED',
-      reason:
-        'Neither the prospect nor the company shows sufficient relevance to the product, so no outreach was generated.',
-      proceed: false,
-      suggestion: null,
-    };
-  }
-
-  if (prospectWeak) {
-    return {
-      overall_fit: overall,
-      classification: 'NOT_QUALIFIED',
-      reason: `This prospect does not appear sufficiently relevant to the product's target audience. ${prospect.relevance_reason}`.trim(),
-      proceed: false,
-      suggestion,
-    };
-  }
-
-  if (companyWeak) {
-    return {
-      overall_fit: overall,
-      classification: 'NOT_QUALIFIED',
+      action: 'DO_NOT_CONTACT',
       reason: `Available public information does not indicate a meaningful use case for the current offering at this company. ${company.fit_reasons[0]?.reason ?? ''}`.trim(),
       proceed: false,
       suggestion: null,
     };
   }
 
-  // Company fit resting only on inference is not a qualification. Industry
-  // context can make a use case plausible, but "plausible" is a reason to check
-  // with a human, not a reason to pitch.
-  if (company.evidence_basis === 'INFERRED') {
+  if (companyState === 'QUALIFIED') {
+    if (prospectState === 'QUALIFIED') {
+      return {
+        overall_fit: overall,
+        classification: 'QUALIFIED',
+        action: 'TARGET_DIRECTLY',
+        reason: `${prospect.relevance_reason} ${company.fit_reasons[0]?.reason ?? ''}`.trim(),
+        proceed: true,
+        suggestion: null,
+      };
+    }
+    if (prospectState === 'BORDERLINE') {
+      return {
+        overall_fit: overall,
+        classification: 'BORDERLINE',
+        action: 'VERIFY_BETTER_CONTACT',
+        reason: `${capitalize(prospectBorderlineReason(prospect))}, so the target is held for a human rather than pitched.`,
+        proceed: false,
+        // The company side is fine here — genuinely OBSERVED, not weak. The
+        // open question is entirely "is this the right person", which is
+        // exactly what points at verifying or finding a different contact
+        // rather than simply declining the account.
+        suggestion: VERIFY_BETTER_CONTACT_SUGGESTION,
+      };
+    }
+    // prospectState === 'NOT_QUALIFIED'
     return {
       overall_fit: overall,
-      classification: 'BORDERLINE',
-      reason:
-        'Company fit rests on inference from context rather than an observed workflow. No retrieved source shows the operations this product would serve, so the target is held for a human rather than pitched.',
+      classification: 'NOT_QUALIFIED',
+      action: 'FIND_BETTER_CONTACT',
+      reason: `This prospect does not appear sufficiently relevant to the product's target audience. ${prospect.relevance_reason}`.trim(),
       proceed: false,
-      suggestion: null,
+      suggestion: FIND_BETTER_CONTACT_SUGGESTION,
     };
   }
 
-  // Symmetric with the company check above: decision authority and seniority
-  // can make a person a PLAUSIBLE target without any source tying them to the
-  // workflow itself. Above the floor is not the same as evidenced — a
-  // capped-but-still-passable score must not silently combine into QUALIFIED
-  // just because it cleared the numeric bar.
-  if (prospect.evidence_basis === 'INFERRED') {
+  // companyState === 'BORDERLINE': plausible fit, insufficient confidence.
+  // Never treated as qualified — but not necessarily a dead end either.
+  if (prospectState === 'QUALIFIED') {
     return {
       overall_fit: overall,
       classification: 'BORDERLINE',
-      reason:
-        'Prospect fit rests on seniority and decision authority rather than an observed link between this person and the qualified workflow. No retrieved source ties them to it, so the target is held for a human rather than pitched.',
-      proceed: false,
-      // The company side is fine here — genuinely OBSERVED, not weak. The
-      // open question is entirely "is this the right person", which is
-      // exactly what points at finding a different, better-evidenced contact
-      // rather than simply declining the account.
-      suggestion:
-        'The company looks like a plausible fit, but this person does not appear to own or influence the relevant workflows. Consider identifying a functional owner or decision-maker there instead.',
-    };
-  }
-
-  // Neither side is weak, but something could not be established.
-  if (prospectUnknown || companyUnknown) {
-    const which = prospectUnknown && companyUnknown ? 'prospect and company' : prospectUnknown ? 'prospect' : 'company';
-    return {
-      overall_fit: overall,
-      classification: 'BORDERLINE',
-      reason: `There is some evidence of fit, but public information was insufficient to establish ${which} relevance with confidence. Held for a human to judge rather than pitching an unsupported use case.`,
-      proceed: false,
-      suggestion: null,
-    };
-  }
-
-  // Both sides are at least MEDIUM and above the floors.
-  if (RANK[prospect.classification] >= 2 && RANK[company.classification] >= 2) {
-    return {
-      overall_fit: overall,
-      classification: 'QUALIFIED',
-      reason: `${prospect.relevance_reason} ${company.fit_reasons[0]?.reason ?? ''}`.trim(),
+      action: 'EXPLORATORY_OUTREACH',
+      reason: `${capitalize(companyBorderlineReason(company))}, but this person is a well-evidenced target in their own right. Proceeding cautiously: outreach stays exploratory, asks rather than assumes the workflow exists, and still requires a genuinely verified signal before any message is drafted.`,
       proceed: true,
       suggestion: null,
     };
   }
-
+  if (prospectState === 'BORDERLINE') {
+    return {
+      overall_fit: overall,
+      classification: 'BORDERLINE',
+      action: 'EXPLORATORY_OUTREACH_IF_SIGNAL',
+      reason: `Neither side is confidently evidenced — ${companyBorderlineReason(company)}, and ${prospectBorderlineReason(prospect)}. Cautious exploratory outreach is allowed only if a genuinely verified signal about this person survives review; otherwise the target is held for a human.`,
+      proceed: true,
+      suggestion: null,
+    };
+  }
+  // prospectState === 'NOT_QUALIFIED', company only BORDERLINE: spending
+  // effort finding a DIFFERENT contact at an unconfirmed account is
+  // premature, so this holds rather than triggering a paid discovery search.
   return {
     overall_fit: overall,
     classification: 'BORDERLINE',
-    reason:
-      'Fit is plausible on both sides but not strong enough to pitch confidently without a human check.',
+    action: 'FIND_BETTER_CONTACT_OR_HOLD',
+    reason: `Company fit is only plausible, not confirmed — ${companyBorderlineReason(company)} — and this prospect does not appear to be the right contact either. Held for a human, who may look for a better-evidenced contact or wait for stronger company signal rather than spend outreach on an unconfirmed account.`,
     proceed: false,
     suggestion: null,
   };

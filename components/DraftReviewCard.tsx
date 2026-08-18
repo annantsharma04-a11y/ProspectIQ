@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import type { DraftRow } from '@/lib/types';
+import { useEffect, useRef, useState } from 'react';
+import type { DraftRow, RunRow } from '@/lib/types';
 
 /** Strip internal "[automatic]" markers from reader-facing text. */
 function humanize(text: string): string {
@@ -21,12 +21,23 @@ const VALIDATION_STYLE: Record<string, string> = {
   flagged: 'bg-amber-100 text-amber-700',
 };
 
+/** Shown once a review action is recorded. Every outcome restates the same
+ *  guarantee — outreach is never sent by the app, only ever manually. */
+const DONE_MESSAGE: Record<string, string> = {
+  approved: 'Approved for outreach review. ProspectIQ prepares the message for you; outreach is always sent manually.',
+  edited: 'Edit saved and approved for outreach review. ProspectIQ prepares the message for you; outreach is always sent manually.',
+  rejected: 'Rejected. ProspectIQ prepares messages for review only — outreach is always sent manually, and this one will not be used.',
+};
+
 export function DraftReviewCard({
   runId,
+  run,
   draft,
   onReviewed,
 }: {
   runId: string;
+  /** Watched only to know when a background regeneration has settled. */
+  run: Pick<RunRow, 'status' | 'error'>;
   draft: DraftRow;
   onReviewed: () => void;
 }) {
@@ -36,6 +47,49 @@ export function DraftReviewCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(draft.reviewer_action);
+
+  // Regeneration replaces the draft row entirely (delete + insert, the same
+  // pattern generate_message already uses), so a genuinely new draft arrives
+  // here as a NEW `draft.id` — the parent remounts this component (keyed on
+  // that id) once it does, which is the real "done" signal for success. This
+  // local state exists only to show a busy state in between, and to surface a
+  // failure — which does NOT produce a new draft.id, so has to be caught here.
+  const [regenerating, setRegenerating] = useState(false);
+  const [regenerateError, setRegenerateError] = useState<string | null>(null);
+  const wasRunning = useRef(false);
+
+  useEffect(() => {
+    if (run.status === 'running') {
+      wasRunning.current = true;
+      return;
+    }
+    if (regenerating && wasRunning.current) {
+      // Settled. If this component is still mounted, no new draft.id arrived,
+      // which means the regeneration failed rather than succeeded — success
+      // would have remounted us with a fresh draft instead.
+      setRegenerating(false);
+      setRegenerateError(run.error ?? 'Could not generate a new draft. Try again.');
+    }
+    wasRunning.current = false;
+  }, [run.status, run.error, regenerating]);
+
+  async function regenerate() {
+    setRegenerating(true);
+    setRegenerateError(null);
+    wasRunning.current = false;
+    try {
+      const res = await fetch(`/api/runs/${runId}/regenerate-message`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? 'Could not start regeneration.');
+      // Fires an immediate refetch; the run's own realtime subscription
+      // (already active on this page) picks up further progress and the
+      // eventual new draft without any polling here.
+      onReviewed();
+    } catch (err) {
+      setRegenerating(false);
+      setRegenerateError(err instanceof Error ? err.message : 'Something went wrong');
+    }
+  }
 
   async function review(action: 'approved' | 'edited' | 'rejected') {
     setBusy(true);
@@ -81,8 +135,25 @@ export function DraftReviewCard({
               {draft.validation_status}
             </span>
           )}
+          <button
+            onClick={regenerate}
+            disabled={regenerating || busy}
+            className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+          >
+            {regenerating ? 'Regenerating…' : 'Regenerate message'}
+          </button>
         </div>
       </div>
+
+      {regenerating && (
+        <p className="mb-2 rounded-lg bg-indigo-50 px-2.5 py-1.5 text-xs text-indigo-800">
+          Writing a new version of this message — same evidence, new wording. This page updates
+          automatically when it is ready.
+        </p>
+      )}
+      {regenerateError && (
+        <p className="mb-2 rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-700">{regenerateError}</p>
+      )}
 
       {draft.subject && (
         <p className="mb-2 text-sm text-slate-700">
@@ -191,7 +262,7 @@ export function DraftReviewCard({
 
       {done ? (
         <p className="mt-4 rounded-lg bg-slate-100 px-3 py-2 text-sm font-medium text-slate-700">
-          Recorded: {done}. Nothing was sent — this app never contacts a prospect.
+          {DONE_MESSAGE[done] ?? DONE_MESSAGE.approved}
         </p>
       ) : (
         <div className="mt-4 flex flex-wrap gap-2">
@@ -199,7 +270,7 @@ export function DraftReviewCard({
             <>
               <button
                 onClick={() => review('edited')}
-                disabled={busy}
+                disabled={busy || regenerating}
                 className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
               >
                 Save &amp; approve edit
@@ -218,20 +289,21 @@ export function DraftReviewCard({
             <>
               <button
                 onClick={() => review('approved')}
-                disabled={busy}
+                disabled={busy || regenerating}
                 className="rounded-lg bg-green-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
               >
                 Approve
               </button>
               <button
                 onClick={() => setEditing(true)}
-                className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                disabled={regenerating}
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
               >
                 Edit
               </button>
               <button
                 onClick={() => review('rejected')}
-                disabled={busy}
+                disabled={busy || regenerating}
                 className="rounded-lg border border-red-300 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
               >
                 Reject

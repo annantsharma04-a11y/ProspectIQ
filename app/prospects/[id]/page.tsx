@@ -130,7 +130,7 @@ export default async function ProspectPage({ params }: { params: Promise<{ id: s
                   {latestDraft.reviewer_action ?? 'awaiting review'}
                 </span>
                 <span className="text-slate-400">
-                  Nothing is ever sent — review only
+                  Human review only — outreach is always sent manually
                 </span>
               </div>
               <p className="whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-sm leading-relaxed text-slate-700">

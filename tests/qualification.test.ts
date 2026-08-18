@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   combineQualification,
+  companyFitState,
+  prospectFitState,
   applyEvidenceDiscipline,
   applyProspectEvidenceDiscipline,
   PROSPECT_FIT_FLOOR,
@@ -137,12 +139,18 @@ describe('combineQualification — the outreach gate', () => {
     expect(r.proceed).toBe(false);
   });
 
-  it('4. CFO + unknown company fit → BORDERLINE, held for review', () => {
+  it('4. CFO + unknown company fit → BORDERLINE, but exploratory outreach is allowed (a QUALIFIED prospect is not blocked by an unconfirmed company)', () => {
+    // Matrix cell: company BORDERLINE (here from UNKNOWN, not inference) ×
+    // prospect QUALIFIED → EXPLORATORY_OUTREACH. Classification stays
+    // BORDERLINE — never QUALIFIED — but `proceed` is true so the pipeline
+    // can attempt cautious, discovery-oriented outreach rather than holding
+    // a well-evidenced prospect hostage to an unconfirmed company.
     const r = combineQualification(
       prospect({ role: 'Chief Financial Officer', seniority: 'CFO' }),
       company({
         score: 50,
         classification: 'UNKNOWN',
+        evidence_basis: 'UNKNOWN',
         industry: null,
         relevant_workflows: [],
         capability_matches: [],
@@ -152,8 +160,11 @@ describe('combineQualification — the outreach gate', () => {
     );
 
     expect(r.classification).toBe('BORDERLINE');
-    expect(r.proceed).toBe(false);
+    expect(r.action).toBe('EXPLORATORY_OUTREACH');
+    expect(r.proceed).toBe(true);
     expect(r.reason).toMatch(/insufficient to establish company relevance/i);
+    expect(r.reason).toMatch(/exploratory/i);
+    expect(r.suggestion).toBeNull();
   });
 
   it('6. a strong hook cannot rescue a poor fit — the gate never sees hooks', () => {
@@ -217,12 +228,194 @@ describe('combineQualification — the outreach gate', () => {
     expect(r2.proceed).toBe(false);
   });
 
-  it('reports both sides failing without a misleading single-cause reason', () => {
+  it('when both sides fail, the company gate dominates — matches the matrix exactly (NOT_QUALIFIED company + any prospect state → do not contact)', () => {
+    // The decision matrix collapses every prospect state under a
+    // NOT_QUALIFIED company into one "do not contact" row — there is no
+    // separate "both failed" message, by design: a company with no use case
+    // is reason enough on its own, regardless of the prospect.
     const r = combineQualification(
       prospect({ score: 10, classification: 'LOW' }),
       company({ score: 10, classification: 'LOW' }),
     );
-    expect(r.reason).toMatch(/neither the prospect nor the company/i);
+    expect(r.action).toBe('DO_NOT_CONTACT');
+    expect(r.classification).toBe('NOT_QUALIFIED');
+    expect(r.reason).toMatch(/does not indicate a meaningful use case/i);
+  });
+});
+
+// ─── the full company-state × prospect-state decision matrix ────────────────
+//
+// One test per cell, asserting `action` directly rather than pattern-matching
+// prose — `action` is the exhaustive, typed record of which cell fired.
+// Company/prospect fixtures are built to land in each FitState deliberately
+// (never just "some score that happens to work"), and companyFitState()/
+// prospectFitState() are asserted alongside combineQualification() so a
+// fixture drifting out of its intended state fails loudly at the state-
+// derivation step, not only at the end of the whole matrix.
+//
+//   Company \ Prospect   QUALIFIED                BORDERLINE                      NOT_QUALIFIED
+//   QUALIFIED            TARGET_DIRECTLY          VERIFY_BETTER_CONTACT           FIND_BETTER_CONTACT
+//   BORDERLINE           EXPLORATORY_OUTREACH     EXPLORATORY_OUTREACH_IF_SIGNAL  FIND_BETTER_CONTACT_OR_HOLD
+//   NOT_QUALIFIED        DO_NOT_CONTACT           DO_NOT_CONTACT                  DO_NOT_CONTACT
+
+describe('the qualification decision matrix — every cell', () => {
+  // Company fixtures, one per FitState, independent of any particular prospect.
+  const qualifiedCo = () => company(); // HIGH / score 78 / OBSERVED (factory default)
+  const borderlineCoInferred = () =>
+    applyEvidenceDiscipline(
+      company({
+        score: 90,
+        classification: 'HIGH',
+        capability_matches: [
+          { capability_id: 'ap_automation', capability_name: 'AP', company_signal: 'x', fit_strength: 70, evidence: [], basis: 'INFERRED', reason: 'x' },
+        ],
+        fit_reasons: [{ reason: 'Plausible from context.', basis: 'INFERRED', evidence: [] }],
+      }),
+    );
+  const borderlineCoUnknown = () =>
+    company({ score: 50, classification: 'UNKNOWN', evidence_basis: 'UNKNOWN', capability_matches: [], fit_reasons: [] });
+  const notQualifiedCo = () => company({ score: 20, classification: 'LOW' });
+
+  // Prospect fixtures, one per FitState.
+  const qualifiedProspect = () => prospect(); // HIGH / score 80 / OBSERVED (factory default)
+  const borderlineProspectInferred = () =>
+    applyProspectEvidenceDiscipline(prospect({ score: 85, classification: 'HIGH', evidence_basis: 'INFERRED', evidence: [] }));
+  const notQualifiedProspect = () => prospect({ score: 20, classification: 'LOW' });
+
+  it('company fixtures land in the intended FitState', () => {
+    expect(companyFitState(qualifiedCo())).toBe('QUALIFIED');
+    expect(companyFitState(borderlineCoInferred())).toBe('BORDERLINE');
+    expect(companyFitState(borderlineCoUnknown())).toBe('BORDERLINE');
+    expect(companyFitState(notQualifiedCo())).toBe('NOT_QUALIFIED');
+  });
+
+  it('prospect fixtures land in the intended FitState', () => {
+    expect(prospectFitState(qualifiedProspect())).toBe('QUALIFIED');
+    expect(prospectFitState(borderlineProspectInferred())).toBe('BORDERLINE');
+    expect(prospectFitState(notQualifiedProspect())).toBe('NOT_QUALIFIED');
+  });
+
+  it('QUALIFIED company + QUALIFIED prospect → target directly', () => {
+    const r = combineQualification(qualifiedProspect(), qualifiedCo());
+    expect(r.action).toBe('TARGET_DIRECTLY');
+    expect(r.classification).toBe('QUALIFIED');
+    expect(r.proceed).toBe(true);
+    expect(r.suggestion).toBeNull();
+  });
+
+  it('QUALIFIED company + BORDERLINE prospect → verify or find a better contact', () => {
+    const r = combineQualification(borderlineProspectInferred(), qualifiedCo());
+    expect(r.action).toBe('VERIFY_BETTER_CONTACT');
+    expect(r.classification).toBe('BORDERLINE');
+    expect(r.proceed).toBe(false);
+    expect(r.suggestion).toMatch(/verify|functional owner|decision-maker/i);
+  });
+
+  it('QUALIFIED company + NOT_QUALIFIED prospect → find a better contact', () => {
+    const r = combineQualification(notQualifiedProspect(), qualifiedCo());
+    expect(r.action).toBe('FIND_BETTER_CONTACT');
+    expect(r.classification).toBe('NOT_QUALIFIED');
+    expect(r.proceed).toBe(false);
+    expect(r.suggestion).toMatch(/functional owner|decision-maker/i);
+  });
+
+  it('BORDERLINE company + QUALIFIED prospect → cautious exploratory outreach is allowed', () => {
+    const r = combineQualification(qualifiedProspect(), borderlineCoInferred());
+    expect(r.action).toBe('EXPLORATORY_OUTREACH');
+    // Never QUALIFIED — borderline must never mean qualified.
+    expect(r.classification).toBe('BORDERLINE');
+    expect(r.proceed).toBe(true);
+    expect(r.suggestion).toBeNull();
+    expect(r.reason).toMatch(/exploratory/i);
+  });
+
+  it('BORDERLINE company (unknown) + QUALIFIED prospect → the same exploratory action, regardless of why the company is borderline', () => {
+    const r = combineQualification(qualifiedProspect(), borderlineCoUnknown());
+    expect(r.action).toBe('EXPLORATORY_OUTREACH');
+    expect(r.classification).toBe('BORDERLINE');
+    expect(r.proceed).toBe(true);
+  });
+
+  it('BORDERLINE company + BORDERLINE prospect → exploratory outreach only if a verified signal survives review', () => {
+    const r = combineQualification(borderlineProspectInferred(), borderlineCoInferred());
+    expect(r.action).toBe('EXPLORATORY_OUTREACH_IF_SIGNAL');
+    expect(r.classification).toBe('BORDERLINE');
+    // proceed:true means the pipeline is ALLOWED to attempt it — whether a
+    // message actually gets drafted still depends entirely on the existing,
+    // unmodified hook-verification gate finding a genuinely verified signal.
+    // That downstream gate is what enforces "only when a strong signal
+    // exists" — qualification itself cannot see signals it hasn't gathered.
+    expect(r.proceed).toBe(true);
+    expect(r.suggestion).toBeNull();
+    expect(r.reason).toMatch(/verified signal/i);
+  });
+
+  it('BORDERLINE company + NOT_QUALIFIED prospect → find a better contact, or hold (no paid discovery search triggered)', () => {
+    const r = combineQualification(notQualifiedProspect(), borderlineCoInferred());
+    expect(r.action).toBe('FIND_BETTER_CONTACT_OR_HOLD');
+    expect(r.classification).toBe('BORDERLINE');
+    expect(r.proceed).toBe(false);
+    // Deliberately null: searching for a different contact at an unconfirmed
+    // company is premature — this holds rather than spending on discovery.
+    expect(r.suggestion).toBeNull();
+  });
+
+  it('NOT_QUALIFIED company + QUALIFIED prospect → do not contact (company gate dominates)', () => {
+    const r = combineQualification(qualifiedProspect(), notQualifiedCo());
+    expect(r.action).toBe('DO_NOT_CONTACT');
+    expect(r.classification).toBe('NOT_QUALIFIED');
+    expect(r.proceed).toBe(false);
+    expect(r.suggestion).toBeNull();
+  });
+
+  it('NOT_QUALIFIED company + BORDERLINE prospect → do not contact (company gate dominates)', () => {
+    const r = combineQualification(borderlineProspectInferred(), notQualifiedCo());
+    expect(r.action).toBe('DO_NOT_CONTACT');
+    expect(r.classification).toBe('NOT_QUALIFIED');
+    expect(r.proceed).toBe(false);
+  });
+
+  it('NOT_QUALIFIED company + NOT_QUALIFIED prospect → do not contact (company gate dominates)', () => {
+    const r = combineQualification(notQualifiedProspect(), notQualifiedCo());
+    expect(r.action).toBe('DO_NOT_CONTACT');
+    expect(r.classification).toBe('NOT_QUALIFIED');
+    expect(r.proceed).toBe(false);
+  });
+
+  it('overall_fit is always the weaker score, never an average, across every cell', () => {
+    const cells = [
+      [qualifiedProspect(), qualifiedCo()],
+      [borderlineProspectInferred(), qualifiedCo()],
+      [notQualifiedProspect(), qualifiedCo()],
+      [qualifiedProspect(), borderlineCoInferred()],
+      [borderlineProspectInferred(), borderlineCoInferred()],
+      [notQualifiedProspect(), borderlineCoInferred()],
+      [qualifiedProspect(), notQualifiedCo()],
+    ] as const;
+    for (const [p, c] of cells) {
+      const r = combineQualification(p, c);
+      expect(r.overall_fit).toBe(Math.min(p.score, c.score));
+    }
+  });
+
+  it('evidence verification is never weakened for exploratory outreach: an unverified prospect claim is still capped exactly as it would be for a QUALIFIED company', () => {
+    // Same uncited, seniority-only claim applyProspectEvidenceDiscipline is
+    // built to catch — proves the borderline-company path does not bypass it.
+    const raw = prospect({
+      score: 92,
+      classification: 'HIGH',
+      evidence_basis: 'OBSERVED', // self-reported, but...
+      evidence: [], // ...nothing verified backs it
+    });
+    const disciplined = applyProspectEvidenceDiscipline(raw);
+    expect(disciplined.evidence_basis).toBe('INFERRED');
+    expect(disciplined.score).toBeLessThanOrEqual(PROSPECT_INFERRED_ONLY_CEILING);
+
+    const r = combineQualification(disciplined, borderlineCoInferred());
+    // Both sides borderline — still the conditional-signal cell, not upgraded
+    // to a confident action just because the company is also uncertain.
+    expect(r.action).toBe('EXPLORATORY_OUTREACH_IF_SIGNAL');
+    expect(r.classification).not.toBe('QUALIFIED');
   });
 });
 
@@ -600,9 +793,13 @@ describe('a qualified company with an inference-only contact still offers anothe
     expect(applicable).toBe(true);
   });
 
-  it('does NOT fire when the company itself is only inferred', () => {
+  it('does NOT fire when the company itself is only inferred — instead becomes cautious exploratory outreach', () => {
     // The open question there is the COMPANY, not which contact to use —
-    // finding a different person at an unevidenced account fixes nothing.
+    // finding a different person at an unconfirmed account fixes nothing, so
+    // this never suggests one. Under the decision matrix, company BORDERLINE
+    // × prospect BORDERLINE is EXPLORATORY_OUTREACH_IF_SIGNAL: `proceed`
+    // becomes true (the pipeline may attempt a cautious signal search), but
+    // classification stays BORDERLINE and no alternate contact is suggested.
     const uncertainCompany = applyEvidenceDiscipline(
       company({
         score: 92,
@@ -614,20 +811,28 @@ describe('a qualified company with an inference-only contact still offers anothe
     );
     const r = combineQualification(inferredOnlyCeo(), uncertainCompany);
     expect(r.classification).toBe('BORDERLINE');
+    expect(r.action).toBe('EXPLORATORY_OUTREACH_IF_SIGNAL');
+    expect(r.proceed).toBe(true);
     expect(r.suggestion).toBeNull();
+    // The discovery trigger predicate (find a DIFFERENT contact) still never
+    // fires here — proceed is true now, so `!r.proceed` alone already rules it out.
     expect(Boolean(r && !r.proceed && r.suggestion)).toBe(false);
   });
 
   it('does NOT fire when the company did not qualify', () => {
     const r = combineQualification(inferredOnlyCeo(), company({ score: 20, classification: 'LOW' }));
     expect(r.classification).toBe('NOT_QUALIFIED');
+    expect(r.action).toBe('DO_NOT_CONTACT');
     expect(r.suggestion).toBeNull();
   });
 
-  it('does NOT fire when relevance is UNKNOWN rather than inferred', () => {
-    // "Insufficient evidence to tell" is a different, more uncertain state
-    // than "evidence points at inference only" — both sides must be at least
-    // assessed before pointing a user at a specific alternative contact.
+  it('DOES fire when relevance is UNKNOWN rather than inferred — the matrix treats both as the same BORDERLINE prospect state', () => {
+    // Deliberate consolidation: the decision matrix has one BORDERLINE
+    // prospect state, not a separate "inferred" vs "unknown" distinction. A
+    // QUALIFIED company with an unconfirmed-either-way prospect always
+    // recommends verifying or finding a better contact — "we don't know
+    // enough about this person" is exactly as good a reason to check as
+    // "the only evidence is their seniority".
     const r = combineQualification(
       // Above PROSPECT_FIT_FLOOR so this exercises the UNKNOWN branch
       // specifically, not the "score too low" branch above it.
@@ -635,7 +840,11 @@ describe('a qualified company with an inference-only contact still offers anothe
       prismCompany(),
     );
     expect(r.classification).toBe('BORDERLINE');
-    expect(r.suggestion).toBeNull();
+    expect(r.action).toBe('VERIFY_BETTER_CONTACT');
+    expect(r.proceed).toBe(false);
+    expect(r.suggestion).not.toBeNull();
+    expect(r.suggestion).toMatch(/functional owner|decision-maker/i);
+    expect(Boolean(r && !r.proceed && r.suggestion)).toBe(true);
   });
 
   it('still does not fire once the prospect is genuinely qualified', () => {

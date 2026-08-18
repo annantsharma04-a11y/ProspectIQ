@@ -57,7 +57,7 @@ export function Workspace({
         ) : (
           <EmptyPanel
             title="Live run"
-            body="Paste a public LinkedIn profile URL and the fifteen pipeline stages will report here as they execute."
+            body="Paste a public LinkedIn profile URL and the 14 pipeline stages will report here as they execute."
           />
         )}
       </div>
@@ -68,7 +68,7 @@ export function Workspace({
         ) : (
           <EmptyPanel
             title="Result"
-            body="The resolved prospect, the selected hook and its evidence, the drafted message, and the human review controls appear here once a run completes."
+            body="Review the verified person, account fit, research evidence, personalized message, and final approval here."
           />
         )}
       </div>
