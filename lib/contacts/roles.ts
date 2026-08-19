@@ -62,7 +62,15 @@ const FAMILIES: RoleFamily[] = [
     functions: ['Procurement', 'Sourcing', 'Vendor Management'],
   },
   {
-    keywords: /\b(engineering|infrastructure|platform|devops|reliability|sre)\b/i,
+    // "platform" is deliberately NOT a bare trigger here: e-commerce/SaaS
+    // companies routinely describe themselves as "a platform" in ordinary
+    // business language (a marketplace platform, a retail platform) with no
+    // engineering-function content at all — that generic usage is what let
+    // a chargebacks/payments company_signal ("an online retail platform...")
+    // pull VP Engineering into an AP/payments discovery search. The other
+    // five words are near-exclusively technical-team vocabulary and are not
+    // similarly ambiguous.
+    keywords: /\b(engineering|infrastructure|devops|reliability|sre)\b/i,
     roles: ['VP Engineering', 'CTO', 'Head of Infrastructure', 'Engineering Director'],
     functions: ['Engineering', 'Infrastructure', 'Platform'],
   },
@@ -72,8 +80,17 @@ const FAMILIES: RoleFamily[] = [
     functions: ['Data', 'Data Platform', 'Analytics'],
   },
   {
-    keywords: /\b(security|compliance|risk|kyc|aml|fraud)\b/i,
-    roles: ['Chief Compliance Officer', 'Head of Risk', 'CISO', 'Head of Trust and Safety'],
+    // Cybersecurity, kept separate from regulatory/financial compliance below:
+    // a CISO owns infosec, not KYC/AML review or fraud-risk policy, and listing
+    // them under both families is what let a security workflow's search list
+    // leak into compliance/KYC discovery (the Shravan Koti / Zerodha case).
+    keywords: /\bsecurity\b/i,
+    roles: ['CISO', 'Head of Security'],
+    functions: ['Security', 'Information Security'],
+  },
+  {
+    keywords: /\b(compliance|risk|kyc|aml|fraud)\b/i,
+    roles: ['Chief Compliance Officer', 'Head of Risk', 'Head of Trust and Safety'],
     functions: ['Compliance', 'Risk', 'Trust and Safety', 'KYC Operations'],
   },
   {
@@ -102,7 +119,17 @@ const FAMILIES: RoleFamily[] = [
     functions: ['Legal', 'Contracts'],
   },
   {
-    keywords: /\b(operations|logistics|fulfillment|warehouse)\b/i,
+    // "operations" is deliberately NOT a bare trigger here: it is generic
+    // business English ("e-commerce operations", "global operations") that
+    // says nothing about PHYSICAL logistics/fulfillment/warehouse ownership
+    // — the actual function COO/VP Operations own. That genericness is what
+    // let an AP-automation company_signal ("large-scale e-commerce
+    // operations...") pull the company's COO into an accounts-payable
+    // discovery search, purely because the word "operations" appeared in a
+    // sentence about something else entirely. "logistics", "fulfillment"
+    // and "warehouse" are specific enough on their own to keep meaning what
+    // this family is actually for.
+    keywords: /\b(logistics|fulfillment|warehouse)\b/i,
     roles: ['COO', 'VP Operations', 'Head of Operations'],
     functions: ['Operations', 'Logistics', 'Fulfillment'],
   },

@@ -24,6 +24,7 @@ import {
   type IdentityConflict,
   type IdentityProvenance,
 } from './types';
+import { sameCorporateGroup } from './corporate-groups';
 
 /** The identity fields provenance is tracked for. */
 type TrackedField = 'name' | 'role' | 'company' | 'location';
@@ -194,5 +195,49 @@ export function candidateFields(candidate: IdentityCandidate | null): IdentityFi
     role: candidate?.role ?? null,
     company: candidate?.company ?? null,
     location: candidate?.location ?? null,
+  };
+}
+
+/**
+ * A deterministic current-employer check, independent of whatever the
+ * verification model happened to report.
+ *
+ * reconcileProvenance() above only RELABELS conflicts it is given — it does
+ * not generate new ones — so a candidate whose only available evidence is
+ * old enough that a search-based summary never surfaces the discrepancy
+ * (the exact "historical evidence, no current-role signal" case) sailed
+ * through untouched even once the real profile was being fetched, because
+ * nothing ever compared the fetched profile's current company against the
+ * candidate's claimed one when the model itself reported nothing.
+ *
+ * This closes that gap with the cheapest possible check: a single, direct
+ * field comparison against data already fetched for this exact candidate —
+ * no new provider call, no model call, no qualification pass. It never
+ * invents a person, a role or a company; it only ever compares two values
+ * already in hand. When the model already reported its own company
+ * conflict (including a genuine concurrent-role read), this defers to that
+ * richer explanation entirely rather than duplicating or overriding it.
+ *
+ * A mismatch is also not raised when the two names are a known parent/
+ * subsidiary/brand pair (sameCorporateGroup(), lib/identity/corporate-
+ * groups.ts) — a profile pinned to the group entity is not evidence the
+ * person left the brand they were discovered for. This is a curated
+ * membership check, never a similarity heuristic: an unrecognized mismatch
+ * stays exactly as conservative as before.
+ */
+export function currentEmploymentConflict(
+  claimedCompany: string | null,
+  profileCompany: string | null,
+): IdentityConflict | null {
+  if (!claimedCompany || !profileCompany) return null;
+  if (valuesAgree(claimedCompany, profileCompany)) return null;
+  if (sameCorporateGroup(claimedCompany, profileCompany)) return null;
+  return {
+    field: 'company',
+    claimed_value: claimedCompany,
+    claimed_provenance: 'CANDIDATE',
+    public_value: profileCompany,
+    explanation: `This person's own current profile lists "${profileCompany}" as their current company, not "${claimedCompany}".`,
+    sources: [],
   };
 }

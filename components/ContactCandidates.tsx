@@ -7,8 +7,11 @@ import {
   NO_LINKEDIN_MESSAGE,
   canSelectCandidate,
   candidatePreVerification,
+  effectiveIdentityStatus,
   interpretSelectResponse,
+  isContactCandidateStatus,
 } from '@/lib/contacts/select-ui';
+import type { ContactCandidateStatus } from '@/lib/contacts/types';
 import { StatusBadge, type StatusTone } from './StatusBadge';
 
 const STATUS_TONE: Record<string, StatusTone> = {
@@ -35,6 +38,15 @@ const PENDING_LABEL = { eligible: 'Pre-verified', blocked: 'Needs verification' 
 const PENDING_HINT: Record<'eligible' | 'blocked', string> = {
   eligible: 'Passed the evidence and profile checks. Full identity verification runs when you select them.',
   blocked: 'Blocked before selection — the checks below did not pass.',
+};
+
+/**
+ * A friendlier label than the raw status for a candidate this run already
+ * tried and could not fully verify — distinct from "Pre-verified" (still
+ * pending) so the two can never be mistaken for each other again.
+ */
+const RESOLVED_STATUS_LABEL: Partial<Record<string, string>> = {
+  PARTIAL: 'Previously reviewed — verification incomplete',
 };
 
 interface Outcome {
@@ -75,6 +87,11 @@ export function ContactCandidates({
   const router = useRouter();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [outcomes, setOutcomes] = useState<Record<string, Outcome>>({});
+  // The freshest identity_status the server has actually reported directly
+  // to this client for a candidate, keyed by candidate id — takes precedence
+  // over the (possibly stale) server-rendered `candidates` prop. See
+  // effectiveIdentityStatus() in lib/contacts/select-ui.ts.
+  const [statusOverride, setStatusOverride] = useState<Record<string, ContactCandidateStatus>>({});
 
   if (candidates.length === 0) {
     return (
@@ -134,6 +151,15 @@ export function ContactCandidates({
       return;
     }
 
+    // Record the server's own authoritative status for this candidate the
+    // moment it's known, independent of whether the page's server-rendered
+    // props have caught up yet — every non-transport response body carries
+    // `identity_status` (alreadyResolvedBody, the post-verification failure
+    // body, and the pre-verification-blocked body all set it).
+    if (isContactCandidateStatus(body.identity_status)) {
+      setStatusOverride((prev) => ({ ...prev, [candidateId]: body.identity_status as ContactCandidateStatus }));
+    }
+
     const outcome = interpretSelectResponse({ ok: res.ok, status: res.status, body });
 
     if (outcome.type === 'navigate') {
@@ -171,10 +197,16 @@ export function ContactCandidates({
       </h4>
       <ul className="space-y-2.5">
         {candidates.map((c) => {
-          const resolved = c.identity_status !== 'DISCOVERED';
+          // The freshest known status wins over the (possibly stale)
+          // server-rendered prop, and every derivation below reads from
+          // this ONE value — badge, hint text, and the Select button can no
+          // longer disagree with each other.
+          const status = effectiveIdentityStatus(c.identity_status, statusOverride[c.id]);
+          const effective = status === c.identity_status ? c : { ...c, identity_status: status };
+          const resolved = status !== 'DISCOVERED';
           const hasLinkedIn = Boolean(c.linkedin_url);
-          const selectable = canSelectCandidate(c);
-          const preVerification = candidatePreVerification(c);
+          const selectable = canSelectCandidate(effective);
+          const preVerification = candidatePreVerification(effective);
           const isBusy = busyId === c.id;
           const outcome = outcomes[c.id];
 
@@ -199,14 +231,14 @@ export function ContactCandidates({
                   <StatusBadge
                     tone={
                       resolved
-                        ? (STATUS_TONE[c.identity_status] ?? STATUS_TONE.DISCOVERED)
+                        ? (STATUS_TONE[status] ?? STATUS_TONE.DISCOVERED)
                         : selectable
                           ? 'accent'
                           : 'amber'
                     }
                   >
                     {resolved
-                      ? c.identity_status
+                      ? (RESOLVED_STATUS_LABEL[status] ?? status)
                       : selectable
                         ? PENDING_LABEL.eligible
                         : PENDING_LABEL.blocked}
@@ -251,9 +283,9 @@ export function ContactCandidates({
                     </a>
                   ) : (
                     <span className="text-xs text-faint">
-                      {c.identity_status === 'AMBIGUOUS'
+                      {status === 'AMBIGUOUS'
                         ? 'Ambiguous — choose another or confirm manually'
-                        : `${c.identity_status.toLowerCase()} — not eligible to continue`}
+                        : (RESOLVED_STATUS_LABEL[status] ?? `${status.toLowerCase()} — not eligible to continue`)}
                     </span>
                   )
                 ) : !selectable ? (

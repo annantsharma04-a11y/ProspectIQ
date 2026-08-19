@@ -87,7 +87,7 @@ import {
   tier2RolesForWorkflows,
   tier3RolesForWorkflows,
 } from '@/lib/contacts/roles';
-import { rankCandidates } from '@/lib/contacts/rank';
+import { rankCandidates, isCurrentProspect } from '@/lib/contacts/rank';
 import { preVerifyCandidate } from '@/lib/contacts/preverify';
 import { createContactCandidates } from '@/lib/supabase/queries';
 import { matchApprovedProof, proofForPrompt } from '@/lib/proof/match';
@@ -1120,6 +1120,15 @@ export async function findContactCandidatesStage(ctx: PipelineContext): Promise<
 
     const domains = ctx.identity?.company_domain ? [ctx.identity.company_domain] : [];
 
+    // The person this run is already about. Discovery must never suggest
+    // them back to themselves as an "alternative contact" at their own
+    // company — see lib/contacts/rank.ts's isCurrentProspect().
+    const currentProspectIdentity = {
+      linkedin_url: ctx.normalizedUrl,
+      name: ctx.identity?.full_name ?? ctx.run.input_name,
+      company,
+    };
+
     // Discovery runs in deterministic LEVELS, widening only when the previous
     // level produced nothing a human could actually act on.
     //
@@ -1171,7 +1180,13 @@ export async function findContactCandidatesStage(ctx: PipelineContext): Promise<
       searchedRoles.push(...levelRoles);
       queriesRun += result.queriesRun;
       queriesOk += result.queriesOk;
-      allProposed = [...allProposed, ...result.proposed];
+      // Dropped here, before ranking, pre-verification or persistence ever
+      // see it — the current prospect is never a valid "alternative contact"
+      // suggestion at their own company.
+      const proposedExcludingCurrentProspect = result.proposed.filter(
+        (c) => !isCurrentProspect({ name: c.name, linkedin_url: c.linkedin_url, company }, currentProspectIdentity),
+      );
+      allProposed = [...allProposed, ...proposedExcludingCurrentProspect];
 
       // Ranked and pre-verified against every role searched so far, so a
       // candidate found at one level is still judged against the full set of

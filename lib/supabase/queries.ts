@@ -12,6 +12,7 @@ import type {
 } from '@/lib/types';
 import type { ProspectOverviewRow, ProspectRow } from '@/lib/prospects/types';
 import type { ContactCandidateRow } from '@/lib/contacts/types';
+import { isDuplicateCandidate } from '@/lib/contacts/rank';
 import { countsAsResearched, identityPatchFromRun } from '@/lib/prospects/types';
 
 // Typed read/write helpers. All writes use the service-role client (server only).
@@ -455,10 +456,24 @@ export async function createContactCandidates(
   })[],
 ): Promise<ContactCandidateRow[]> {
   if (candidates.length === 0) return [];
+
+  // Idempotency: a retried run re-runs find_contact_candidates from scratch,
+  // and this is a plain insert with no uniqueness constraint of its own — so
+  // without this check, the same discovered person is persisted a second
+  // time as a duplicate row every time the stage re-runs. A candidate already
+  // persisted for this run (whichever status it's in — DISCOVERED, PARTIAL,
+  // VERIFIED, whatever a human already did with it) is left exactly as it
+  // is; only genuinely new people are inserted.
+  const existing = await listContactCandidates(runId);
+  const toInsert = candidates.filter(
+    (c) => !existing.some((e) => isDuplicateCandidate(c, e)),
+  );
+  if (toInsert.length === 0) return [];
+
   const supabase = createServiceClient();
   const { data, error } = await supabase
     .from('contact_candidates')
-    .insert(candidates.map((c) => ({ ...c, run_id: runId })))
+    .insert(toInsert.map((c) => ({ ...c, run_id: runId })))
     .select();
   if (error) throw error;
   return (data as ContactCandidateRow[]) ?? [];

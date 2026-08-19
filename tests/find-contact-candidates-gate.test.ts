@@ -54,6 +54,19 @@ vi.mock('@/lib/contacts/rank', () => ({
   // silently weakened inside these tests.
   roleMatches: (role: string, targets: string[]) =>
     targets.some((t) => t.toLowerCase() === role.toLowerCase()),
+  // Also real, for the same reason: stages.ts calls this directly to drop
+  // the current prospect from proposed candidates before ranking ever runs.
+  isCurrentProspect: (
+    candidate: { name: string; linkedin_url: string | null; company: string | null },
+    current: { linkedin_url: string | null; name: string | null; company: string | null },
+  ) => {
+    if (candidate.linkedin_url && current.linkedin_url) {
+      return candidate.linkedin_url.toLowerCase() === current.linkedin_url.toLowerCase();
+    }
+    if (!current.name || !current.company || !candidate.company) return false;
+    const norm = (v: string) => v.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    return norm(candidate.name) === norm(current.name) && norm(candidate.company) === norm(current.company);
+  },
 }));
 
 const { findContactCandidatesStage, contactDiscoveryApplicable } = await import('@/lib/pipeline/stages');

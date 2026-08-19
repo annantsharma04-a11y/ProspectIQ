@@ -4,7 +4,7 @@
 // non-success server response leaving the UI looking unchanged — can be
 // tested directly, without a DOM.
 
-import type { ContactCandidateRow } from './types';
+import type { ContactCandidateRow, ContactCandidateStatus } from './types';
 import { preVerifyCandidate, type PreVerificationResult } from './preverify';
 
 export const NO_LINKEDIN_MESSAGE = 'Cannot select: no public profile available for verification.';
@@ -43,6 +43,37 @@ export function canSelectCandidate(c: SelectableCandidate): boolean {
 /** The full pre-verification result for a row, for the UI's state label and reason text. */
 export function candidatePreVerification(c: SelectableCandidate): PreVerificationResult {
   return preVerifyCandidate(c);
+}
+
+/**
+ * The identity_status this row should be treated as having for rendering —
+ * fixes a real production report: a candidate card showed the "Pre-verified"
+ * badge and an enabled Select button at the same time as an "already
+ * reviewed and could not be verified (partial)" message. The message came
+ * from a genuine, fresh /select response — the server had already persisted
+ * PARTIAL for this candidate — but the badge and Select button were still
+ * derived from the page's server-rendered `candidates` prop, which had not
+ * yet caught up to that write.
+ *
+ * The fix is not to identity verification or persistence — both already do
+ * the right thing — but to make every part of the card read the SAME
+ * status: the freshest one actually known, which is whatever the server
+ * most recently reported directly to this client (`freshStatus`), falling
+ * back to the row's persisted status only when nothing fresher exists.
+ */
+export function effectiveIdentityStatus(
+  persistedStatus: ContactCandidateStatus,
+  freshStatus: ContactCandidateStatus | null | undefined,
+): ContactCandidateStatus {
+  return freshStatus ?? persistedStatus;
+}
+
+/** True when `value` is one of the real, persisted candidate statuses — never trusts an arbitrary API response string as one. */
+export function isContactCandidateStatus(value: unknown): value is ContactCandidateStatus {
+  return (
+    typeof value === 'string' &&
+    (['DISCOVERED', 'PARTIAL', 'VERIFIED', 'AMBIGUOUS', 'FAILED', 'REJECTED'] as string[]).includes(value)
+  );
 }
 
 // ─── the /select response contract ──────────────────────────────────────────

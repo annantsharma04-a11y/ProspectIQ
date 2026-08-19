@@ -23,6 +23,7 @@ const mockFindOrCreateProspect = vi.fn();
 const mockUpdateContactCandidate = vi.fn();
 const mockResearch = vi.fn();
 const mockVerifySelectedCandidate = vi.fn();
+const mockRetrieveLinkedInProfile = vi.fn();
 const mockDecideIdentity = vi.fn();
 const mockExecutePipeline = vi.fn();
 const mockCheckRateLimit = vi.fn();
@@ -43,6 +44,14 @@ vi.mock('@/lib/supabase/queries', () => ({
 vi.mock('@/lib/research/engine', () => ({ research: (...a: unknown[]) => mockResearch(...a) }));
 vi.mock('@/lib/identity/verify', () => ({
   verifySelectedCandidate: (...a: unknown[]) => mockVerifySelectedCandidate(...a),
+}));
+// No real profile in these tests — reconcileProvenance() (real, unmocked)
+// then has nothing PROFILE-sourced to promote a conflict's provenance with,
+// which keeps this file's existing conflict-free fixtures behaving exactly
+// as before. The current-employment reconciliation itself is tested
+// directly in tests/select-candidate-current-employment.test.ts.
+vi.mock('@/lib/linkedin/fetch', () => ({
+  retrieveLinkedInProfile: (...a: unknown[]) => mockRetrieveLinkedInProfile(...a),
 }));
 vi.mock('@/lib/identity/types', () => ({ decideIdentity: (...a: unknown[]) => mockDecideIdentity(...a) }));
 vi.mock('@/lib/pipeline/execute', () => ({ executePipeline: (...a: unknown[]) => mockExecutePipeline(...a) }));
@@ -107,7 +116,14 @@ beforeEach(() => {
   });
   mockGetContactCandidate.mockResolvedValue(eligibleCandidate());
   mockResearch.mockResolvedValue({ sources: [] });
-  mockVerifySelectedCandidate.mockResolvedValue({ conflicts: [], assessedConfidence: 90, missingFields: [] });
+  mockRetrieveLinkedInProfile.mockResolvedValue({
+    profile: null,
+    access: { directLinkedIn: false, primarySource: 'public_web', profileCompleteness: 'none', reason: null },
+    meta: null,
+    error_code: 'no_token',
+    duration_ms: 0,
+  });
+  mockVerifySelectedCandidate.mockResolvedValue({ conflicts: [], assessedConfidence: 90, missingFields: [], corroboratedFields: [] });
   mockDecideIdentity.mockReturnValue({ status: 'VERIFIED', proceed: true });
   mockFindOrCreateProspect.mockResolvedValue({ prospect: { id: 'prospect-1' }, created: true });
   mockCreateRun.mockResolvedValue(newRun);
@@ -138,7 +154,7 @@ describe('6. a selected candidate still receives the FULL identity verification'
     const order: string[] = [];
     mockVerifySelectedCandidate.mockImplementation(async () => {
       order.push('verify');
-      return { conflicts: [], assessedConfidence: 90, missingFields: [] };
+      return { conflicts: [], assessedConfidence: 90, missingFields: [], corroboratedFields: [] };
     });
     mockCreateRun.mockImplementation(async () => {
       order.push('createRun');
@@ -252,7 +268,7 @@ describe('the route states the verification verdict explicitly', () => {
         selected_at: '2026-08-18T00:00:01Z',
       });
       mockResearch.mockResolvedValue({ sources: [] });
-      mockVerifySelectedCandidate.mockResolvedValue({ conflicts: [], assessedConfidence: 50, missingFields: [] });
+      mockVerifySelectedCandidate.mockResolvedValue({ conflicts: [], assessedConfidence: 50, missingFields: [], corroboratedFields: [] });
       mockDecideIdentity.mockReturnValue({ status: identityStatus, proceed: false });
 
       const body = await (await POST(makeRequest(), makeParams())).json();
