@@ -1,9 +1,8 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { listRuns, listStages } from '@/lib/supabase/queries';
+import { listRuns } from '@/lib/supabase/queries';
 import { getAuthenticatedUser } from '@/lib/supabase/server';
 import {
-  buildActiveRunSummary,
   buildCommandCenterSummary,
   greetingName,
   timeOfDayGreeting,
@@ -11,7 +10,6 @@ import {
   type TriageItem,
 } from '@/lib/dashboard/command-center';
 import type { RunRow } from '@/lib/types';
-import { ActiveWorkSummary } from './ActiveWorkSummary';
 
 /**
  * The homepage — a compact TRIAGE surface, not a second workspace.
@@ -25,6 +23,13 @@ import { ActiveWorkSummary } from './ActiveWorkSummary';
  * Everything is read from `listRuns()` — the same rows History already
  * uses — and derived in lib/dashboard/command-center.ts. No new query, no
  * new write, no pipeline/qualification/identity logic.
+ *
+ * Deliberately does NOT render an active/in-progress "Live work" summary —
+ * removed by request. The underlying data it would have used
+ * (`buildActiveRunSummary`, `summary.activeRunId`, `ACTIVE_STATUSES` in
+ * lib/dashboard/command-center.ts) is untouched and still covered by tests;
+ * only this page's presentation of it was removed. /runs/[id] remains the
+ * one place an in-progress run is shown, live.
  */
 export async function CommandCenter() {
   const user = await getAuthenticatedUser();
@@ -41,16 +46,6 @@ export async function CommandCenter() {
   const name = greetingName(runs, user.email ?? null);
   const greeting = timeOfDayGreeting();
   const allCaughtUp = summary.counts.needsAttention === 0 && summary.counts.ready === 0;
-
-  // A compact description of the one run currently working. Only the stage
-  // list is fetched — the run row is already in `runs` — because this surface
-  // shows four short strings, not the run workspace.
-  const activeRun = summary.activeRunId
-    ? (runs.find((r) => r.id === summary.activeRunId) ?? null)
-    : null;
-  const activeSummary = activeRun
-    ? buildActiveRunSummary(activeRun, await listStages(activeRun.id).catch(() => []))
-    : null;
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -94,7 +89,6 @@ export async function CommandCenter() {
         actionText="Review"
       />
 
-      {activeSummary ? <ActiveWorkSummary summary={activeSummary} /> : null}
     </div>
   );
 }
