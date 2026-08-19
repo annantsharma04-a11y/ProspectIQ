@@ -19,7 +19,7 @@ import { callStructured } from '@/lib/llm/gemini';
 import type { JsonSchema } from '@/lib/llm/types';
 import type { AnalysisClaim } from '@/lib/llm/analyze';
 import { renderBrief, type EmailBrief } from './brief';
-import { checkEmailQuality, type EmailQualityCheck } from './email-quality';
+import { checkEmailQuality, checkDivergence, type EmailQualityCheck } from './email-quality';
 import { checkVoice } from './voice';
 
 const SYSTEM = `You are an editor. You improve the prose of one outreach email.
@@ -133,6 +133,9 @@ export function editIsFaithful(brief: EmailBrief, original: string, edited: stri
   return true;
 }
 
+/** How much MORE similar-to-the-original an edit must become to count as a regression, not noise. */
+const DIRECTION_OF_TRAVEL_MARGIN = 0.1;
+
 export interface DraftChoice {
   message: string;
   claims: AnalysisClaim[];
@@ -148,12 +151,26 @@ export interface DraftChoice {
  * the deterministic checks. A tie goes to the editor, since its whole purpose
  * is the readability the checks cannot measure; anything worse is discarded
  * and never seen again.
+ *
+ * `previousMessage` is supplied ONLY on a user regeneration (null on every
+ * first generation, which is a structural no-op for this whole branch). The
+ * editor is never told a regeneration happened — it edits the writer's draft
+ * on its own merits, brief and quality checks, exactly as it would on a first
+ * generation — so nothing stops it from independently converging back toward
+ * the same "good email" shape the OLD draft also satisfied. That convergence
+ * would silently undo the regeneration the user asked for, and a tied or
+ * better quality score would not catch it, because the quality checks do not
+ * know an old draft exists. So when a previous message is in play, divergence
+ * from it is checked FIRST and cannot be outvoted by the score comparison
+ * below: an edit that regresses toward the old email is discarded regardless
+ * of how well it reads.
  */
 export function chooseDraft(
   brief: EmailBrief,
   written: { message: string; claims: AnalysisClaim[] },
   edited: EditedEmail | null,
   supportingQuote: string | null,
+  previousMessage: string | null = null,
 ): DraftChoice {
   const base = { message: written.message, claims: written.claims, edited: false };
 
@@ -163,6 +180,36 @@ export function chooseDraft(
   }
   if (!editIsFaithful(brief, written.message, edited.message)) {
     return { ...base, reason: 'The edit altered protected content, so it was discarded.' };
+  }
+
+  if (previousMessage) {
+    const editedDivergence = checkDivergence(edited.message, previousMessage);
+    if (!editedDivergence.passed) {
+      return {
+        ...base,
+        reason: 'The edit was too similar to the original message being regenerated, so it was discarded.',
+      };
+    }
+    // Even a faithful, non-duplicate edit is rejected if it pulled the draft
+    // MATERIALLY back toward the old email relative to what the writer had
+    // already achieved. A margin, not a strict inequality: two honest
+    // rewrites of the same argument can land a percentage point or two apart
+    // on shared vocabulary alone (workflow and capability terms the brief
+    // requires both to use), and treating any tiny increase as a regression
+    // would reject good edits for noise. DIRECTION_OF_TRAVEL_MARGIN is the
+    // size of increase that counts as a genuine step backward rather than
+    // incidental overlap — documented and adjustable, same as the pass/fail
+    // thresholds in email-quality.ts.
+    const writtenDivergence = checkDivergence(written.message, previousMessage);
+    if (
+      editedDivergence.wholeMessageSimilarity - writtenDivergence.wholeMessageSimilarity >=
+      DIRECTION_OF_TRAVEL_MARGIN
+    ) {
+      return {
+        ...base,
+        reason: 'The edit was closer to the original message than the written draft, so it was discarded.',
+      };
+    }
   }
 
   const before = score(written.message, brief, supportingQuote);

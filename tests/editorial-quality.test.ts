@@ -86,7 +86,7 @@ describe('whyThisPerson comes from the verified role, never an invented remit', 
   it('reaches the prompt flagged as context, not as a line to reproduce', async () => {
     await writeEmailFromBrief({
       brief: brief(), senderName: 'S', senderCompany: 'Zamp',
-      outreachContext: 'o', sources: [], directive: null,
+      outreachContext: 'o', sources: [],
     });
     expect(promptSent()).toMatch(/not a line to reproduce/i);
     expect(promptSent()).toMatch(/do NOT assert what they own/i);
@@ -133,7 +133,7 @@ describe('the operational implication varies but stays safe and reproducible', (
 describe('the writer is shown the standard, and the openings to avoid', () => {
   beforeEach(async () => {
     await writeEmailFromBrief({
-      brief: brief(), senderName: 'S', senderCompany: 'Zamp', outreachContext: 'o', sources: [], directive: null,
+      brief: brief(), senderName: 'S', senderCompany: 'Zamp', outreachContext: 'o', sources: [],
     });
   });
 
@@ -147,10 +147,15 @@ describe('the writer is shown the standard, and the openings to avoid', () => {
     expect(systemSent()).toMatch(/illustrative, not approved evidence/i);
   });
 
-  it('bans narrating the noticing', () => {
+  it('bans narrating the noticing, and bans restating the fact outright', () => {
     const sys = systemSent();
-    expect(sys).toMatch(/state the fact\. Do not narrate noticing it/i);
-    for (const bad of ['I noticed', 'I saw that', 'I came across', 'Watching', 'highlights the sheer', 'underscores']) {
+    // Superseded instruction: an earlier version of this prompt told the
+    // model to "state the fact" as the opener, which was itself the root
+    // cause of openers restating the hook almost verbatim. The corrected
+    // instruction says the opposite.
+    expect(sys).toMatch(/NEVER use the verified fact as the opening sentence/i);
+    expect(sys).not.toMatch(/state the fact\. Do not narrate noticing it/i);
+    for (const bad of ['I saw that', 'I came across', 'Watching', 'highlights the sheer', 'underscores']) {
       expect(sys, bad).toContain(bad);
     }
   });

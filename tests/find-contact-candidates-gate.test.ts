@@ -280,3 +280,293 @@ describe('findContactCandidatesStage — real stage invocation', () => {
     expect(output.discovery_levels[0].eligible).toBeGreaterThan(0);
   });
 });
+
+// ─── human-authorized exploratory discovery (BORDERLINE + CONTINUED + INFERRED-only) ──
+//
+// Real failure case: run 4131fc61-979e-40a6-946b-1872f61dcb03 (Zerodha).
+// BORDERLINE company, borderline prospect, human decision CONTINUED — but
+// EVERY capability match was INFERRED (kyc_kyb, ap_automation, chargebacks,
+// all strength 40, zero evidence). The old gate built its role-search input
+// exclusively from capabilities.observed, which was empty, so the stage
+// exited with "No observed workflow to derive functional-owner roles from"
+// even though contactDiscoveryApplicable() had already let it through on the
+// strength of the human's decision. The human's authorization to search
+// harder was being computed and then ignored.
+//
+// These prove the fix widens ONLY the search input, never the evidence: the
+// qualification object handed in is asserted byte-identical before and after
+// in every test that reaches this path.
+
+const { withAccountDecision } = await import('@/lib/qualification/account-decision');
+
+/** A company with ONLY inferred capabilities — no OBSERVED match at all, matching the real Zerodha run. */
+const inferredOnlyCompany = (): CompanyFit =>
+  company({
+    score: 55,
+    classification: 'MEDIUM',
+    evidence_basis: 'INFERRED',
+    capability_matches: [
+      {
+        capability_id: 'kyc_kyb',
+        capability_name: 'KYC / KYB onboarding and compliance',
+        company_signal: 'Zerodha processes high-volume customer and NRI digital onboarding, identity verification at scale.',
+        fit_strength: 40,
+        evidence: [],
+        basis: 'INFERRED',
+        reason: 'Regulated brokerage onboarding implies KYC/KYB workflow.',
+      },
+      {
+        capability_id: 'ap_automation',
+        capability_name: 'Accounts payable automation',
+        company_signal: 'Financial services enterprise handling multi-entity vendor payments, reconciliation across group entities.',
+        fit_strength: 40,
+        evidence: [],
+        basis: 'INFERRED',
+        reason: 'Multi-entity finance operations imply an AP workflow.',
+      },
+      {
+        capability_id: 'chargebacks',
+        capability_name: 'Chargeback and dispute handling',
+        company_signal: 'Online trading platform handling large numbers of retail deposits and withdrawals.',
+        fit_strength: 40,
+        evidence: [],
+        basis: 'INFERRED',
+        reason: 'High-volume retail payment flows imply dispute handling.',
+      },
+    ],
+  });
+
+const continuedExploratory = (): TargetQualification =>
+  withAccountDecision(
+    qualification(borderlineProspect(), inferredOnlyCompany()),
+    'CONTINUED',
+    'user-1',
+  );
+
+const heldExploratory = (): TargetQualification =>
+  withAccountDecision(
+    qualification(borderlineProspect(), inferredOnlyCompany()),
+    'HELD',
+    'user-1',
+  );
+
+const cloneOf = (q: TargetQualification) => JSON.parse(JSON.stringify(q));
+
+beforeEach(() => {
+  mockDiscoverContacts.mockResolvedValue({ proposed: [], sources: [], roles: [], queriesRun: 1, queriesOk: 1 });
+  mockRankCandidates.mockReturnValue([]);
+});
+
+describe('human-authorized exploratory discovery — real Zerodha failure case', () => {
+  it('1 & 10. OBSERVED capability still drives discovery unchanged (existing behavior preserved)', async () => {
+    const ctx = newContext(run());
+    ctx.qualification = withAccountDecision(
+      qualification(borderlineProspect(), qualifiedCompany()),
+      'CONTINUED',
+      'user-1',
+    );
+    // qualifiedCompany() -> action VERIFY_BETTER_CONTACT, already in
+    // CONTACT_DISCOVERY_ACTIONS regardless of any decision — the ordinary path.
+
+    await findContactCandidatesStage(ctx);
+
+    expect(mockDiscoverContacts).toHaveBeenCalled();
+    const roles = mockDiscoverContacts.mock.calls[0][0].roles as string[];
+    expect(roles.length).toBeGreaterThan(0);
+    const output = mockFinishStage.mock.calls[0][1].output;
+    expect(output.exploratory_inferred_context).toBe(false);
+  });
+
+  it('2. BORDERLINE + borderline contact + CONTINUED + ONLY inferred capabilities → exploratory discovery runs', async () => {
+    const ctx = newContext(run());
+    ctx.qualification = continuedExploratory();
+
+    await findContactCandidatesStage(ctx);
+
+    expect(mockDiscoverContacts).toHaveBeenCalled();
+    const finishCall = mockFinishStage.mock.calls[0][1];
+    expect(finishCall.status).not.toBe('skipped');
+    expect(finishCall.output.exploratory_inferred_context).toBe(true);
+    expect(finishCall.summary).toMatch(/human-authorized exploratory discovery/i);
+  });
+
+  it('role families are derived from the inferred capabilities — KYC/AP/chargebacks all reach discovery', async () => {
+    const ctx = newContext(run());
+    ctx.qualification = continuedExploratory();
+
+    await findContactCandidatesStage(ctx);
+
+    // Every discoverContacts call across the escalating levels; union the
+    // roles searched to see the full set the fix derived from inferred text.
+    const allRoles = mockDiscoverContacts.mock.calls.flatMap((c) => c[0].roles as string[]);
+    const lower = allRoles.map((r) => r.toLowerCase());
+
+    // KYC/KYB family -> Compliance/Risk/Onboarding-flavoured titles
+    expect(lower.some((r) => /compliance|risk|trust/.test(r))).toBe(true);
+    // AP family -> Finance/Accounts Payable/Procurement-flavoured titles
+    expect(lower.some((r) => /finance|accounts payable|procurement/.test(r))).toBe(true);
+    // Chargebacks family -> Payments/Risk/Disputes-flavoured titles
+    expect(lower.some((r) => /payments|dispute|fraud/.test(r))).toBe(true);
+  });
+
+  it('uses the existing role-family architecture (rolesForWorkflows), not a separate system', async () => {
+    const { rolesForWorkflows } = await import('@/lib/contacts/roles');
+    const q = continuedExploratory();
+    const signals = q.company_fit.capability_matches.flatMap((m) => [m.company_signal, m.capability_name]);
+
+    const expected = rolesForWorkflows(signals);
+    expect(expected.length).toBeGreaterThan(0);
+
+    const ctx = newContext(run());
+    ctx.qualification = q;
+    await findContactCandidatesStage(ctx);
+
+    const firstCallRoles = mockDiscoverContacts.mock.calls[0][0].roles as string[];
+    expect(firstCallRoles).toEqual(expected);
+  });
+
+  it('3. the inferred capability is NEVER promoted to OBSERVED by this stage', async () => {
+    const q = continuedExploratory();
+    const before = cloneOf(q);
+
+    const ctx = newContext(run());
+    ctx.qualification = q;
+    await findContactCandidatesStage(ctx);
+
+    // The exact object the stage was handed is untouched — basis, evidence,
+    // score and classification for every capability match are byte-identical.
+    expect(ctx.qualification).toEqual(before);
+    for (const m of ctx.qualification!.company_fit.capability_matches) {
+      expect(m.basis).toBe('INFERRED');
+      expect(m.evidence).toEqual([]);
+    }
+  });
+
+  it('4. BORDERLINE + HELD → no contact discovery at all', async () => {
+    const ctx = newContext(run());
+    ctx.qualification = heldExploratory();
+
+    await findContactCandidatesStage(ctx);
+
+    expect(mockDiscoverContacts).not.toHaveBeenCalled();
+    const finishCall = mockFinishStage.mock.calls[0][1];
+    expect(finishCall.status).toBe('skipped');
+  });
+
+  it('5. NOT_QUALIFIED company → human override remains unavailable, even with a forged CONTINUED decision', async () => {
+    const forced = withAccountDecision(
+      qualification(qualifiedProspect(), notQualifiedCompany()),
+      'CONTINUED',
+      'user-1',
+    );
+    const ctx = newContext(run());
+    ctx.qualification = forced;
+
+    await findContactCandidatesStage(ctx);
+
+    expect(mockDiscoverContacts).not.toHaveBeenCalled();
+    const finishCall = mockFinishStage.mock.calls[0][1];
+    expect(finishCall.status).toBe('skipped');
+    expect(finishCall.output.reason).toBe('NOT_QUALIFIED');
+  });
+
+  it('6. candidate pre-verification still blocks an invalid/ambiguous candidate found via exploratory discovery', async () => {
+    mockRankCandidates.mockReturnValue([
+      {
+        name: 'Someone Person',
+        role: 'Compliance Manager',
+        linkedin_url: null, // no usable profile URL -> EXCLUDED by preVerifyCandidate
+        evidence: { source_url: 'https://example.com/a', quote: 'Someone Person is Compliance Manager at Zerodha.' },
+        reason: 'Public role matches the qualified workflow.',
+        confidence: 60,
+        rankScore: 60,
+      },
+    ]);
+
+    const ctx = newContext(run());
+    ctx.qualification = continuedExploratory();
+    await findContactCandidatesStage(ctx);
+
+    // Excluded, never offered, never persisted as selectable.
+    expect(mockCreateContactCandidates).not.toHaveBeenCalled();
+    const output = mockFinishStage.mock.calls[0][1].output;
+    expect(output.pre_verification.excluded).toBeGreaterThan(0);
+    expect(output.candidates).toHaveLength(0);
+  });
+
+  it('7. a candidate found via exploratory discovery is only ever DISCOVERED, never auto-selected — identity verification remains a separate later step', async () => {
+    mockRankCandidates.mockReturnValue([
+      {
+        name: 'Dana Reyes',
+        // Exact title from the KYC/KYB family's role list — this file's
+        // roleMatches() mock is an EXACT match (see the vi.mock block above),
+        // unlike the real fuzzy overlap, so the candidate's role has to be one
+        // of the titles actually searched.
+        role: 'Chief Compliance Officer',
+        linkedin_url: 'https://www.linkedin.com/in/dana-reyes',
+        // company must match run().input_company ('Acme Corp') — the exact
+        // string findContactCandidatesStage passes to preVerifyCandidate.
+        evidence: { source_url: 'https://example.com/a', quote: 'Dana Reyes is Chief Compliance Officer at Acme Corp.' },
+        reason: 'Public role matches the qualified workflow.',
+        confidence: 80,
+        rankScore: 80,
+      },
+    ]);
+
+    const ctx = newContext(run());
+    ctx.qualification = continuedExploratory();
+    await findContactCandidatesStage(ctx);
+
+    expect(mockCreateContactCandidates).toHaveBeenCalledTimes(1);
+    const rows = mockCreateContactCandidates.mock.calls[0][1] as { identity_status: string }[];
+    expect(rows).toHaveLength(1);
+    // DISCOVERED, not VERIFIED — full identity verification is a distinct
+    // step that runs only after a human selects this candidate (the
+    // /contact-candidates/[id]/select route, unmodified by this fix).
+    expect(rows[0].identity_status).toBe('DISCOVERED');
+  });
+
+  it('8. no eligible candidates found via exploratory discovery → clean, honest empty result', async () => {
+    mockDiscoverContacts.mockResolvedValue({ proposed: [], sources: [], roles: ['Head of Compliance'], queriesRun: 1, queriesOk: 1 });
+    mockRankCandidates.mockReturnValue([]);
+
+    const ctx = newContext(run());
+    ctx.qualification = continuedExploratory();
+    await findContactCandidatesStage(ctx);
+
+    const finishCall = mockFinishStage.mock.calls[0][1];
+    expect(finishCall.status).toBe('complete');
+    expect(finishCall.output.candidates).toEqual([]);
+    expect(finishCall.output.exploratory_inferred_context).toBe(true);
+    expect(finishCall.summary).toMatch(/no verified candidates found/i);
+  });
+
+  it('9. CONTINUE does not alter the qualification classification, score, or basis', async () => {
+    const q = continuedExploratory();
+    expect(q.classification).toBe('BORDERLINE');
+
+    const ctx = newContext(run());
+    ctx.qualification = q;
+    await findContactCandidatesStage(ctx);
+
+    expect(ctx.qualification!.classification).toBe('BORDERLINE');
+    expect(ctx.qualification!.company_fit.score).toBe(q.company_fit.score);
+    expect(ctx.qualification!.company_fit.evidence_basis).toBe('INFERRED');
+    expect(ctx.qualification!.human_account_decision).toEqual(q.human_account_decision);
+  });
+
+  it('the real Zerodha shape (run 4131fc61) resolves roles across all three inferred families', async () => {
+    // Mirrors the actual persisted capability_matches for run
+    // 4131fc61-979e-40a6-946b-1872f61dcb03 as closely as the test fixtures allow.
+    const ctx = newContext(run({ input_company: 'Zerodha' }));
+    ctx.qualification = continuedExploratory();
+
+    await findContactCandidatesStage(ctx);
+
+    expect(mockDiscoverContacts).toHaveBeenCalled();
+    const output = mockFinishStage.mock.calls[0][1].output;
+    expect(output.applicable).toBe(true);
+    expect(output.reason).toBeUndefined(); // not skipped — 'reason' is only set on the skip path
+    expect(output.exploratory_inferred_context).toBe(true);
+  });
+});

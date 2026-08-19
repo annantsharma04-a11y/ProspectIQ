@@ -311,3 +311,219 @@ describe('superlative and scale phrasing', () => {
     expect(checkOpener(msg, HOOK3).isHeadline).toBe(false);
   });
 });
+
+// ─── superlative precision: "leading" as adjective vs verb ─────────────────
+//
+// Audit finding: the plain word-boundary match on "leading" flagged the verb
+// sense ("time leading business finance", "you're co-leading Sunday
+// PropTech") exactly as readily as the adjective sense ("the leading firm").
+// Two real generated drafts (Myntra/Kannan, OYO/Saurav) were sent to manual
+// review over legitimate, well-personalized openers for this reason alone.
+// The fix requires a determiner immediately before "leading" — the adjective
+// sense is reliably "the/a/an/one of the leading X"; the verb sense never is.
+
+describe('superlative precision — "leading" requires adjective context', () => {
+  const HOOK4 = {
+    signal: 'A company milestone unrelated to the wording under test',
+    supporting_quote: 'Some unrelated supporting quote',
+    source_title: 'Some unrelated headline',
+  };
+
+  it('1. "the leading payments platform" — still detected', () => {
+    const msg = "Hi Priya,\n\nAs the leading payments platform in the region, this caught my eye.";
+    const r = checkOpener(msg, HOOK4);
+    expect(r.isHeadline).toBe(true);
+    expect(r.failures.join(' ')).toMatch(/superlative/i);
+  });
+
+  it('2. "one of the leading fintech providers" — still detected', () => {
+    const msg = "Hi Priya,\n\nAs one of the leading fintech providers in the country, this stood out.";
+    const r = checkOpener(msg, HOOK4);
+    expect(r.isHeadline).toBe(true);
+    expect(r.failures.join(' ')).toMatch(/superlative/i);
+  });
+
+  it('3. "time leading business finance" — NOT detected (the real Myntra/Kannan case)', () => {
+    const msg =
+      'Kannan, I noticed your recent transition into the CFO role at Myntra after your time leading business finance at Flipkart.';
+    const r = checkOpener(msg, HOOK4);
+    expect(r.isHeadline).toBe(false);
+    expect(r.failures.join(' ')).not.toMatch(/superlative/i);
+  });
+
+  it('4. "you\'re co-leading Sunday PropTech" — NOT detected (the real OYO/Saurav case)', () => {
+    const msg =
+      "Saurav, saw you're co-leading Sunday PropTech alongside Rakesh Kumar to scale premium assets ahead of PRISM's IPO.";
+    const r = checkOpener(msg, HOOK4);
+    expect(r.isHeadline).toBe(false);
+    expect(r.failures.join(' ')).not.toMatch(/superlative/i);
+  });
+
+  it('5a. existing high-confidence superlatives remain detected: largest', () => {
+    const msg = 'Hi Nithin,\n\nRunning the largest brokerage in the region keeps things interesting.';
+    expect(checkOpener(msg, HOOK4).isHeadline).toBe(true);
+  });
+
+  it('5b. existing high-confidence superlatives remain detected: cutting-edge / foremost / premier', () => {
+    for (const word of ['cutting-edge', 'foremost', 'premier', 'biggest', 'renowned']) {
+      const msg = `Hi Nithin,\n\nBuilding a ${word} platform for retail investors is no small task.`;
+      expect(checkOpener(msg, HOOK4).isHeadline, word).toBe(true);
+    }
+  });
+
+  it('a bare, undeterminered "leading" elsewhere in the sentence still does not trip the check', () => {
+    // Guards against a regex that merely drops the word-boundary requirement
+    // rather than genuinely requiring determiner context.
+    const msg = 'Hi Nithin,\n\nLeading through that transition must have required real judgment calls.';
+    expect(checkOpener(msg, HOOK4).isHeadline).toBe(false);
+  });
+});
+
+// ─── Issue 2: the Stage 12 summary reports the ACTUAL opener failure ────────
+//
+// Audit finding: generateMessageStage() always displayed "Draft still opens
+// by restating the source..." whenever checkOpener().isHeadline was true,
+// regardless of which of checkOpener()'s six independent checks actually
+// failed. Two real runs (be4ec378 / Myntra, 4b8dbb21 / OYO) failed on the
+// superlative check specifically and were shown a factually wrong reason.
+
+import { openerFailureSummary } from '@/lib/pipeline/stages';
+
+describe('openerFailureSummary — reports the real reason, not an assumed one', () => {
+  it('containment failure → the restatement summary', () => {
+    const summary = openerFailureSummary(
+      { reason: 'The opening sentence restates the research signal almost verbatim (83% of its content words), so it reads like a pasted headline rather than an observation.' },
+      98,
+    );
+    expect(summary).toBe('Draft still opens by restating the source after one regeneration (98 words) — sent to manual review.');
+  });
+
+  it('superlative failure → the superlative summary, NOT restatement', () => {
+    const summary = openerFailureSummary(
+      { reason: 'The opening leans on superlatives ("largest", "leading") instead of a specific observation.' },
+      73,
+    );
+    expect(summary).toBe('Draft still leans on superlative phrasing after one regeneration (73 words) — sent to manual review.');
+    expect(summary).not.toMatch(/restating the source/i);
+  });
+
+  it('company-size-and-superlative failure also reads as superlative, not restatement', () => {
+    const summary = openerFailureSummary(
+      { reason: 'The opening recites the company’s own size and standing back to them rather than making an observation.' },
+      80,
+    );
+    expect(summary).toMatch(/superlative phrasing/i);
+  });
+
+  it('stacked-facts failure → its own accurate summary', () => {
+    const summary = openerFailureSummary(
+      { reason: 'The opening sentence packs 3 separate facts together, which reads as a research summary rather than one clear observation.' },
+      90,
+    );
+    expect(summary).toMatch(/stacks too many facts/i);
+    expect(summary).not.toMatch(/restating the source|superlative/i);
+  });
+
+  it('overlong-sentence failure → its own accurate summary', () => {
+    const summary = openerFailureSummary(
+      { reason: 'The opening sentence runs to 52 words. A natural observation is roughly 15-30.' },
+      95,
+    );
+    expect(summary).toMatch(/overlong sentence/i);
+  });
+
+  it('research-report-phrasing failure → its own accurate summary', () => {
+    const summary = openerFailureSummary(
+      { reason: 'The message opens with research-report phrasing rather than an observation a salesperson would write.' },
+      88,
+    );
+    expect(summary).toMatch(/research-report phrasing/i);
+  });
+
+  it('company-describes-itself failure → its own accurate summary', () => {
+    const summary = openerFailureSummary(
+      { reason: 'The opening describes the company back to itself. The prospect already knows what their company does.' },
+      70,
+    );
+    expect(summary).toMatch(/describes the company back to itself/i);
+  });
+
+  it('an unrecognised reason falls back honestly rather than mislabeling', () => {
+    const summary = openerFailureSummary({ reason: 'Some future check text not yet mapped.' }, 60);
+    expect(summary).not.toMatch(/restating the source/i);
+    expect(summary).toMatch(/pasted headline/i);
+  });
+});
+
+describe('multiple simultaneous opener failures — summary follows the SAME primary/first failure checkOpener() itself uses', () => {
+  it('when containment and superlative both fail, the summary reports containment (checkOpener\'s own first-listed check)', () => {
+    // Verbatim-restated AND leans on "the leading X" — containment is
+    // evaluated first inside checkOpener(), so opener.reason (failures[0])
+    // is already the containment message; the summary must track it exactly.
+    const hook = {
+      signal: 'Acme is the leading logistics platform processing millions of shipments',
+      supporting_quote: 'Acme is the leading logistics platform',
+      source_title: 'Acme: the leading logistics platform',
+    };
+    const msg = 'Hi Sam,\n\nAcme is the leading logistics platform processing millions of shipments annually.';
+    const opener = checkOpener(msg, hook);
+
+    expect(opener.isHeadline).toBe(true);
+    expect(opener.failures.length).toBeGreaterThan(1); // containment AND superlative both present
+    expect(opener.reason).toMatch(/restates .+ almost verbatim/i); // containment is failures[0]
+
+    const summary = openerFailureSummary(opener, 42);
+    expect(summary).toMatch(/restating the source/i);
+    expect(summary).not.toMatch(/superlative phrasing/i);
+  });
+});
+
+// ─── end-to-end regression: the real audit cases, composed through both real functions ──
+
+describe('regression — the real audit cases, through checkOpener() + openerFailureSummary() together', () => {
+  it('a genuine source-restatement draft still fails and still reports restatement (f2b80bd9-shaped)', () => {
+    const hook = {
+      signal:
+        "Zerodha operates as India's largest retail discount brokerage firm handling millions of retail brokerage customers under strict SEBI financial regulatory frameworks requiring high-volume customer onboarding and verification workflows.",
+      supporting_quote: 'Zerodha is India’s largest retail discount brokerage',
+      source_title: 'Zerodha: India’s largest discount broker',
+    };
+    const msg =
+      "Hi Nithin,\n\nGiven that Zerodha operates as India's largest retail discount brokerage firm handling millions of retail brokerage customers under strict SEBI financial regulatory frameworks requiring high-volume customer onboarding and verification workflows, I was curious how your team manages that.";
+
+    const opener = checkOpener(msg, hook);
+    expect(opener.isHeadline).toBe(true);
+
+    const summary = openerFailureSummary(opener, 60);
+    expect(summary).toBe('Draft still opens by restating the source after one regeneration (60 words) — sent to manual review.');
+  });
+
+  it('a legitimate personalized opener using "leading" as a verb now PASSES (be4ec378-shaped)', () => {
+    const hook = {
+      signal: 'Kannan Ganesan was appointed as Chief Financial Officer of Myntra, succeeding Abhishek Gupta.',
+      supporting_quote: 'Kannan Ganesan appointed CFO of Myntra',
+      source_title: 'Myntra names Kannan Ganesan as new CFO',
+    };
+    const msg =
+      'Kannan, I noticed your recent transition into the CFO role at Myntra after your time leading business finance at Flipkart.';
+
+    const opener = checkOpener(msg, hook);
+    expect(opener.isHeadline).toBe(false);
+    expect(opener.failures).toEqual([]);
+  });
+
+  it('a legitimate personalized opener using "co-leading" as a verb now PASSES (4b8dbb21-shaped)', () => {
+    const hook = {
+      signal:
+        "Led Sunday PropTech alongside Group CFO Rakesh Kumar to manage high-performing hotel and office assets through long-term strategies and recent funding rounds ahead of OYO's parent PRISM's IPO.",
+      supporting_quote: 'Saurav Agarwal co-leads Sunday PropTech',
+      source_title: 'Sunday PropTech leadership',
+    };
+    const msg =
+      "Saurav, saw you're co-leading Sunday PropTech alongside Rakesh Kumar to scale premium assets ahead of PRISM's IPO.";
+
+    const opener = checkOpener(msg, hook);
+    expect(opener.isHeadline).toBe(false);
+    expect(opener.failures).toEqual([]);
+  });
+});

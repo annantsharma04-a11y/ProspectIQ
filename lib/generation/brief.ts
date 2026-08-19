@@ -57,6 +57,23 @@ export interface EmailBrief {
   whyThisPerson: string | null;
   /** What we actually want to learn about how they run this work today. */
   desiredConversation: string | null;
+  /**
+   * Why the verified fact matters, in the hook's own words — set at hook
+   * selection (select_hook), not written here. This is the reasoning the
+   * OPENER should be built FROM: an interpretation of the fact, not the fact
+   * itself. Null only when the gated hook carries none.
+   */
+  whyThisMatters: string | null;
+  /**
+   * Why this fact is a reason to make contact — also from the gated hook.
+   *
+   * Explicitly a HYPOTHESIS, not a verified claim: hook selection reasons
+   * about what a signal PLAUSIBLY implies, the same way qualification's own
+   * INFERRED capabilities do, and nothing re-verifies that reasoning against
+   * a source the way the fact itself was verified. The writer is told this
+   * distinction directly (see renderBrief) so it hedges rather than asserts.
+   */
+  outreachHypothesis: string | null;
 }
 
 /**
@@ -126,6 +143,10 @@ export interface BuildBriefInput {
   /** The prospect's verified role, when identity established one. */
   role?: string | null;
   verifiedFact: string;
+  /** hook.why_it_matters — the gated hook's own reasoning, if any. */
+  whyThisMatters?: string | null;
+  /** hook.outreach_rationale — the gated hook's own hypothesis, if any. */
+  outreachHypothesis?: string | null;
   solution: SolutionMatch | null;
   proof: ProofMatch | null;
 }
@@ -155,6 +176,8 @@ export function buildEmailBrief(input: BuildBriefInput): EmailBrief {
     desiredConversation: workflow
       ? `How ${input.company ?? 'they'} handles ${workflow.toLowerCase()} today, and where we could be useful.`
       : null,
+    whyThisMatters: input.whyThisMatters ?? null,
+    outreachHypothesis: input.outreachHypothesis ?? null,
   };
 }
 
@@ -172,6 +195,8 @@ export function briefForContext(
     company: ctx.identity?.company ?? ctx.run.input_company,
     role: ctx.identity?.role ?? ctx.run.input_title,
     verifiedFact: ctx.hook.signal,
+    whyThisMatters: ctx.hook.why_it_matters,
+    outreachHypothesis: ctx.hook.outreach_rationale,
     solution,
     proof,
   });
@@ -182,17 +207,32 @@ export function renderBrief(brief: EmailBrief): string {
   const lines = [
     'EMAIL BRIEF — these decisions are already made. Write them as prose; do not re-decide them.',
     `Recipient: ${brief.recipientName ?? '(unknown)'}`,
-    `Verified fact (the email opens on THIS, and only this): ${brief.verifiedFact}`,
+    // Deliberately NOT "the email opens on this" — that instruction is what
+    // previously taught the writer to use the fact AS the opening sentence,
+    // which is a containment failure waiting to happen. The fact is now
+    // supplied as PRIVATE CONTEXT the opener is built FROM; see the OPENER
+    // rules in the system prompt for what that means in practice.
+    `Verified fact (private context — you must NOT use this sentence, or a close paraphrase of it, as the opener; see OPENER rules below): ${brief.verifiedFact}`,
   ];
 
-  if (brief.operationalImplication) {
+  if (brief.whyThisMatters) {
     lines.push(
-      `Operational implication (express this idea; rephrase for grammar if needed, but do NOT add difficulty, friction, struggle or urgency to it): ${brief.operationalImplication}`,
+      `Why this matters (the hook's own reasoning — build the opener's OBSERVATION from this, not from the fact itself): ${brief.whyThisMatters}`,
     );
   }
   if (brief.whyThisPerson) {
     lines.push(
       `Why this person (context for you, not a line to reproduce; do NOT assert what they own): ${brief.whyThisPerson}`,
+    );
+  }
+  if (brief.outreachHypothesis) {
+    lines.push(
+      `Why this is a reason to reach out (a HYPOTHESIS, not a verified company fact — use hedged language such as "I imagine", "it can mean", "curious how", "I was wondering whether"; never convert this into a stated fact like "your AP volume is increasing" or "your finance team is overloaded" unless the evidence you were given actually supports that specific claim): ${brief.outreachHypothesis}`,
+    );
+  }
+  if (brief.operationalImplication) {
+    lines.push(
+      `Operational implication (a safe fallback if you need it; rephrase for grammar if needed, but do NOT add difficulty, friction, struggle or urgency to it): ${brief.operationalImplication}`,
     );
   }
   if (brief.workflow) lines.push(`Workflow (the ONE workflow this email is about): ${brief.workflow}`);

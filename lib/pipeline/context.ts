@@ -71,6 +71,13 @@ export interface PipelineContext {
    * Consumed and cleared by generateMessageStage.
    */
   pendingMessage: { subject: string; message: string; claims: unknown[] } | null;
+  /**
+   * The PERSISTED draft text a user regeneration is writing a materially
+   * different version of. Set only by regenerateMessageOnly(); stays null on
+   * every first generation, which is what keeps the divergence check and the
+   * REGENERATION prompt wrapper from ever firing on a first draft.
+   */
+  previousMessage: string | null;
   validation: ValidationResult | null;
 
   /**
@@ -108,6 +115,7 @@ export function newContext(run: RunRow): PipelineContext {
     draftId: null,
     messageFailedGate: false,
     pendingMessage: null,
+    previousMessage: null,
     validation: null,
     contactCandidates: null,
   };

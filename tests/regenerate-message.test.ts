@@ -264,7 +264,7 @@ beforeEach(() => {
 });
 
 describe('regenerateMessageOnly — reuses the selected hook, forces a fresh model call', () => {
-  it('calls the model with a rewrite instruction, not a plain re-ask', async () => {
+  it('calls the model with the REGENERATION wrapper, carrying the actual previous draft as the anchor', async () => {
     // generateMessageStage's own pre-existing one-retry-on-failed-checks policy
     // can add a second model call after ours — same response both times.
     mockCallStructured.mockImplementation(routeByPurpose(goodModelResponse(), FRESH_MESSAGE, []));
@@ -272,14 +272,21 @@ describe('regenerateMessageOnly — reuses the selected hook, forces a fresh mod
     await regenerateMessageOnly(RUN_ID);
 
     // The rewrite now goes to the dedicated writer, carrying the run's settled
-    // brief plus the instruction — not back to the research corpus.
+    // brief plus the REGENERATION wrapper — not back to the research corpus,
+    // and not the REPAIR wrapper (which says the opposite thing).
     const write = mockCallStructured.mock.calls.map((c) => c[0]).find((c) => c.purpose === 'write_outreach_email');
     expect(write).toBeDefined();
     expect(write!.input).toContain('EMAIL BRIEF');
-    expect(write!.input).toMatch(/REWRITE/);
-    expect(write!.input).toMatch(/genuinely different version/i);
-    // The prior draft was NOT reused — the model was asked to write anew.
-    expect(write!.input).not.toContain('OLD DRAFT TEXT');
+    expect(write!.input).toContain('REGENERATION');
+    expect(write!.input).not.toMatch(/REWRITE —/);
+    expect(write!.input).not.toContain('change\nnothing else');
+    expect(write!.input).toMatch(/materially different/i);
+    // THE FIX: the actual previous draft is now the anchor the model writes
+    // against — this is what the audit found missing. 'OLD DRAFT TEXT' is the
+    // fixture's persisted draft text (see draft() below), and it must appear
+    // as the thing to diverge from, not be silently discarded.
+    expect(write!.input).toContain('PREVIOUS VERSION');
+    expect(write!.input).toContain('OLD DRAFT TEXT');
   });
 
   it('does not re-run research, qualification, or signal extraction', async () => {
@@ -601,5 +608,179 @@ describe('regenerateMessageOnly — identity is reused, not re-litigated', () =>
     mockCallStructured.mockImplementation(routeByPurpose(cleanModelResponse(), CLEAN_MESSAGE, []));
 
     await expect(regenerateMessageOnly(RUN_ID)).resolves.not.toThrow();
+  });
+});
+
+// ─── divergence enforcement, end to end through the real stage ─────────────
+//
+// The unit-level fixtures in tests/regeneration-divergence.test.ts pin the
+// measurement and the prompt separation. These drive the REAL
+// regenerateMessageOnly() -> generateMessageStage() -> validateClaimsStage()
+// path with the model mocked, proving the divergence check is actually wired
+// into the one-retry budget rather than existing only as an unused function.
+describe('divergence enforcement, end to end through the real stage', () => {
+  const PREVIOUS_FOR_DIVERGENCE = [
+    'PRISM announced a leadership realignment across finance operations.',
+    'As that structure settles, vendor payment volume and invoice matching need to stay consistent ' +
+      'across the finance function, which takes real coordination between the teams involved.',
+    'Zamp can process invoices, match and reconcile payables against purchase orders, flag the ' +
+      'exceptions that need a human, and run accounts payable workflows end to end across the group.',
+    "I'd be keen to understand how your team handles that today and where we could be useful. " +
+      'Would be great to compare notes on a short call.',
+  ].join('\n\n');
+
+  /** One word changed — the audit's own example of the bug. */
+  const NEAR_DUPLICATE = PREVIOUS_FOR_DIVERGENCE.replace('need to stay', 'needs to stay');
+
+  /** Genuinely reworked construction, same argument, same hook engagement. */
+  const GENUINELY_DIFFERENT = [
+    "A new leader now owns the finance function at PRISM after last quarter's reshuffle.",
+    'Moves like that tend to leave vendor payment volume and invoice matching out of step across the ' +
+      'function for a while, and someone ends up bringing it back into line.',
+    'On that workflow specifically, Zamp reconciles payables against purchase orders, surfaces the ' +
+      'exceptions worth a second look, and carries accounts payable through to close for the whole group.',
+    'Would be great to compare notes on a short call about how that side of things is being handled right now.',
+  ].join('\n\n');
+
+  function routeSequenced(writeResponses: string[]) {
+    let writeCall = 0;
+    return (args: { purpose: string; input: string }) => {
+      if (args.purpose === 'write_outreach_email') {
+        const message = writeResponses[Math.min(writeCall, writeResponses.length - 1)];
+        writeCall++;
+        return Promise.resolve({
+          data: { subject: 'Finance operations at PRISM', message, messageClaims: [] },
+          meta: { model: 'test', used_fallback_model: false, purpose: 'write_outreach_email', duration_ms: 1, attempts: 1, total_tokens: null },
+        });
+      }
+      if (args.purpose === 'edit_outreach_email') {
+        // Echo back whatever draft it was given, unchanged — chooseDraft()
+        // treats an unchanged edit as "no edit", isolating these tests to the
+        // divergence logic rather than also exercising the editor's own
+        // decision (that has its own dedicated coverage elsewhere).
+        const draftMessage = args.input.split('DRAFT TO EDIT\n')[1]?.split('\n\nImprove')[0] ?? '';
+        return Promise.resolve({
+          data: { message: draftMessage.trim(), messageClaims: [] },
+          meta: { model: 'test', used_fallback_model: false, purpose: 'edit_outreach_email', duration_ms: 1, attempts: 1, total_tokens: null },
+        });
+      }
+      return Promise.resolve(cleanModelResponse());
+    };
+  }
+
+  function persistedDraft(): Record<string, unknown> | null {
+    const call = mockUpdateDraft.mock.calls.at(-1);
+    return call ? (call[1] as Record<string, unknown>) : null;
+  }
+
+  function generateMessageStageOutput(): Record<string, unknown> | null {
+    for (const [, payload] of [...mockFinishStage.mock.calls].reverse()) {
+      const p = payload as { output?: Record<string, unknown> };
+      if (p?.output && 'regeneration_divergence' in p.output) return p.output;
+    }
+    return null;
+  }
+
+  function writeCallCount(): number {
+    return mockCallStructured.mock.calls.filter((c) => (c[0] as { purpose: string }).purpose === 'write_outreach_email').length;
+  }
+
+  beforeEach(() => {
+    mockGetDraft.mockResolvedValue(draft({ message_text: PREVIOUS_FOR_DIVERGENCE }));
+    // The default run() has no input_company, and this file's hook/slug never
+    // resolves one either — so checkPersonalization's "names the company"
+    // check has nothing to match against, independent of divergence entirely.
+    // All three fixtures below already say "PRISM"; this just gives the
+    // pre-existing check something to find, so these tests isolate the
+    // divergence behaviour rather than tripping on an unrelated gate.
+    mockGetRun.mockResolvedValue(run({ input_company: 'PRISM' }));
+  });
+
+  describe('4. exact duplicate — divergence fails, existing retry fires', () => {
+    it('a byte-identical rewrite triggers exactly one retry', async () => {
+      mockCallStructured.mockImplementation(routeSequenced([PREVIOUS_FOR_DIVERGENCE, GENUINELY_DIFFERENT]));
+
+      await regenerateMessageOnly(RUN_ID);
+
+      expect(writeCallCount()).toBe(2);
+      const output = generateMessageStageOutput()!;
+      expect(output.regeneration_divergence).toMatchObject({ passed: true });
+    });
+  });
+
+  describe('5. near duplicate — divergence fails, retry fires', () => {
+    it('a one-word change triggers exactly one retry', async () => {
+      mockCallStructured.mockImplementation(routeSequenced([NEAR_DUPLICATE, GENUINELY_DIFFERENT]));
+
+      await regenerateMessageOnly(RUN_ID);
+
+      expect(writeCallCount()).toBe(2);
+      const finalText = persistedDraft()!.final_text as string;
+      expect(finalText).not.toBe(NEAR_DUPLICATE);
+    });
+  });
+
+  describe('6. genuine rewrite — divergence passes, no retry', () => {
+    it('a materially different first attempt is accepted with a single write call', async () => {
+      mockCallStructured.mockImplementation(routeSequenced([GENUINELY_DIFFERENT]));
+
+      await regenerateMessageOnly(RUN_ID);
+
+      expect(writeCallCount()).toBe(1);
+      const output = generateMessageStageOutput()!;
+      expect(output.regeneration_divergence).toMatchObject({ passed: true });
+    });
+  });
+
+  describe('7. retry succeeds — the final message is the SECOND attempt', () => {
+    it('a near-duplicate first attempt followed by a genuine rewrite ships the rewrite', async () => {
+      mockCallStructured.mockImplementation(routeSequenced([NEAR_DUPLICATE, GENUINELY_DIFFERENT]));
+
+      await regenerateMessageOnly(RUN_ID);
+
+      const finalText = persistedDraft()!.final_text as string;
+      expect(finalText).toBe(GENUINELY_DIFFERENT);
+      const output = generateMessageStageOutput()!;
+      expect(output.regeneration_divergence).toMatchObject({ passed: true });
+    });
+  });
+
+  describe('8. retry still fails — both attempts too similar', () => {
+    it('does not loop past the existing one-retry budget', async () => {
+      mockCallStructured.mockImplementation(routeSequenced([NEAR_DUPLICATE, NEAR_DUPLICATE]));
+
+      await regenerateMessageOnly(RUN_ID);
+
+      // Exactly two write calls — the original attempt plus the ONE retry.
+      // No third call, ever.
+      expect(writeCallCount()).toBe(2);
+    });
+
+    it('does not corrupt the run — persists and flags, the existing contract for a check that survives the retry', async () => {
+      mockCallStructured.mockImplementation(routeSequenced([NEAR_DUPLICATE, NEAR_DUPLICATE]));
+
+      await regenerateMessageOnly(RUN_ID);
+
+      // Consistent with how every other quality-gate failure that survives
+      // the retry is already handled: persisted, not silently discarded, and
+      // the run lands in a real terminal status for a human — never stuck
+      // running, never corrupted.
+      const output = generateMessageStageOutput()!;
+      expect(output.regeneration_divergence).toMatchObject({ passed: false });
+
+      const finalStatuses = mockUpdateRun.mock.calls.map((c) => c[1]?.status).filter(Boolean);
+      expect(['ready_for_review', 'needs_manual_review']).toContain(finalStatuses[finalStatuses.length - 1]);
+    });
+
+    it('the failure is recorded on the stage output, not swallowed', async () => {
+      mockCallStructured.mockImplementation(routeSequenced([NEAR_DUPLICATE, NEAR_DUPLICATE]));
+
+      await regenerateMessageOnly(RUN_ID);
+
+      const output = generateMessageStageOutput()!;
+      const divergence = output.regeneration_divergence as { passed: boolean; reason: string | null };
+      expect(divergence.passed).toBe(false);
+      expect(divergence.reason).toBeTruthy();
+    });
   });
 });
