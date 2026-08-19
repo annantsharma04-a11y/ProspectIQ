@@ -26,6 +26,8 @@ const brief = (over: Partial<EmailBrief> = {}): EmailBrief => ({
   subjectContext: 'Invoice processing',
   whyThisPerson: 'Their role is Head of Finance Operations at Shiprocket, which sits close to invoice processing.',
   desiredConversation: 'How Shiprocket handles invoice processing today, and where we could be useful.',
+  whyThisMatters: null,
+  outreachHypothesis: null,
   ...over,
 });
 

@@ -56,7 +56,7 @@ function words(text: string): string[] {
   return text.trim().split(/\s+/).filter(Boolean);
 }
 
-function tokens(text: string): Set<string> {
+export function tokens(text: string): Set<string> {
   return new Set(
     text
       .toLowerCase()
@@ -137,6 +137,92 @@ export interface EmailQualityOptions {
  * targeted regeneration instruction — a rewrite told exactly what was wrong is
  * far more likely to fix it than one told "try again".
  */
+/**
+ * Is the newly regenerated email materially different from the one it
+ * replaces?
+ *
+ * Reuses the same token-overlap technique the rest of this module already
+ * uses (see `tokens()` above and `opening_uses_fact` in checkEmailQuality) —
+ * no new dependency, no NLP library. Two measures, because a rewrite can pass
+ * one and still fail the other: a materially different body with the SAME
+ * opening sentence is still the "one or two words changed" failure this
+ * exists to catch, and a genuinely new opening on an otherwise-recycled body
+ * is the same failure from the other end.
+ *
+ * THRESHOLDS are deliberately conservative and named as constants so they are
+ * easy to retune once real regenerations have been observed — this is a first
+ * documented cut, not a tuned model. Similarity is Jaccard overlap on the same
+ * >=4-letter-token vocabulary `tokens()` already uses elsewhere in this file:
+ * shared tokens over the union of both token sets. 1.0 is identical, 0 is no
+ * shared vocabulary at all.
+ */
+export interface DivergenceCheck {
+  passed: boolean;
+  wholeMessageSimilarity: number;
+  openingSimilarity: number;
+  reason: string | null;
+}
+
+/** At or above this whole-message overlap, treat the rewrite as a duplicate. */
+export const WHOLE_MESSAGE_SIMILARITY_THRESHOLD = 0.72;
+/**
+ * At or above this opening-sentence overlap, treat the opening as unchanged.
+ *
+ * Set equal to the whole-message threshold rather than tighter: an opening is
+ * a short sentence (often ~15-25 words), and it is REQUIRED to state the same
+ * verified fact as before — so a large share of its content words (the
+ * company, the figure, the subject of the fact) legitimately repeat even
+ * after a genuine rewrite. A tighter bound here rejected real reconstructions
+ * in testing; this line is the one to loosen first if false positives show up
+ * in production, and the one to tighten first if near-duplicates start
+ * slipping through on the opening alone.
+ */
+export const OPENING_SIMILARITY_THRESHOLD = 0.72;
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 1; // nothing to compare — treat as identical, not as diverged
+  let shared = 0;
+  for (const t of a) if (b.has(t)) shared++;
+  const union = a.size + b.size - shared;
+  return union === 0 ? 1 : shared / union;
+}
+
+export function checkDivergence(newMessage: string, previousMessage: string): DivergenceCheck {
+  const newBody = emailBody(newMessage).trim();
+  const prevBody = emailBody(previousMessage).trim();
+
+  if (newBody === prevBody) {
+    return {
+      passed: false,
+      wholeMessageSimilarity: 1,
+      openingSimilarity: 1,
+      reason: 'The regenerated email is identical to the previous version.',
+    };
+  }
+
+  const wholeMessageSimilarity = jaccard(tokens(newBody), tokens(prevBody));
+  const openingSimilarity = jaccard(tokens(openingSentence(newBody)), tokens(openingSentence(prevBody)));
+
+  const failures: string[] = [];
+  if (wholeMessageSimilarity >= WHOLE_MESSAGE_SIMILARITY_THRESHOLD) {
+    failures.push(
+      `The regenerated email is ${Math.round(wholeMessageSimilarity * 100)}% similar to the previous version overall — this reads as the same email with a few words changed.`,
+    );
+  }
+  if (openingSimilarity >= OPENING_SIMILARITY_THRESHOLD) {
+    failures.push(
+      `The opening sentence is ${Math.round(openingSimilarity * 100)}% similar to the previous version's opening — change the construction, not just a word or two.`,
+    );
+  }
+
+  return {
+    passed: failures.length === 0,
+    wholeMessageSimilarity,
+    openingSimilarity,
+    reason: failures.length > 0 ? failures.join(' ') : null,
+  };
+}
+
 export function checkEmailQuality(message: string, options: EmailQualityOptions): EmailQualityCheck {
   const brief = options.brief;
   const body = emailBody(message);

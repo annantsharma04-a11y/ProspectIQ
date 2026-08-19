@@ -67,14 +67,14 @@ const brief = (over: Partial<EmailBrief> = {}): EmailBrief => ({
   ...over,
 });
 
-const write = (b: EmailBrief, directive: string | null = null) =>
+const write = (b: EmailBrief, repairNotes: string | null = null) =>
   writeEmailFromBrief({
     brief: b,
     senderName: 'Annant Sharma',
     senderCompany: 'Zamp',
     outreachContext: 'We build agents for finance operations.',
     sources,
-    directive,
+    repairNotes,
   });
 
 const promptSent = () => mockCallStructured.mock.calls[0][0].input as string;
@@ -260,7 +260,7 @@ describe('Tests 6 & 7 — workflow and implication are settled, not inferred', (
   });
 });
 
-describe('Test 8 — targeted regeneration keeps the brief', () => {
+describe('Test 8 — repair-directive rewrite keeps the brief (quality-gate retry, not a user regeneration)', () => {
   const directive = [
     'EMAIL QUALITY FAILURES:',
     '1. The email describes what the product IS instead of what it DOES.',

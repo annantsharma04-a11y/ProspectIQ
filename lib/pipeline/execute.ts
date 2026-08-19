@@ -17,6 +17,7 @@ import { newContext, StageAbort, type PipelineContext } from './context';
 import { briefForContext } from '@/lib/generation/brief';
 import { outreachContext } from '@/lib/generation/sender';
 import { writeEmailFromBrief } from '@/lib/generation/write-email';
+import { currentDraftText } from '@/lib/drafts/current-text';
 import {
   accountDecisionState,
   accountHeld,
@@ -397,6 +398,20 @@ export async function regenerateMessageOnly(runId: string): Promise<void> {
       throw new Error('This run has no settled email brief, so there is nothing to regenerate from.');
     }
 
+    // The ANCHOR: the actual persisted draft the user is looking at right now
+    // (same precedence currentDraftText() gives the UI — an edit beats a
+    // claim-validation revision beats the original generation). This is the
+    // fix for the reported bug: the previous fallback path stashed a draft
+    // fragment into ctx.analysis.suggestedMessage, which the writer never
+    // read, so regeneration had nothing concrete to diverge from and the
+    // repair wrapper's "change nothing else" wording worked directly against
+    // the "write something different" instruction sitting next to it.
+    const previousDraft = await getDraft(runId);
+    if (!previousDraft) {
+      throw new Error('This run has no existing draft to regenerate from.');
+    }
+    ctx.previousMessage = currentDraftText(previousDraft);
+
     const sender = senderFor(ctx);
     const written = await writeEmailFromBrief({
       brief,
@@ -404,10 +419,7 @@ export async function regenerateMessageOnly(runId: string): Promise<void> {
       senderCompany: sender.company,
       outreachContext: outreachContext(sender),
       sources: ctx.sources,
-      directive:
-        'Write a genuinely different version of this outreach message: new phrasing, new structure, ' +
-        'a different opening line from before. Stay grounded in the same verified observation and keep ' +
-        'every fact accurate — do not add or drop claims.',
+      previousMessage: ctx.previousMessage,
     });
 
     // Written before the stage begins, so this failure never marks the stage

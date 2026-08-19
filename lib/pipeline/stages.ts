@@ -32,7 +32,7 @@ import { checkVoice } from '@/lib/generation/voice';
 import { briefForContext } from '@/lib/generation/brief';
 import { writeEmailFromBrief, type WrittenEmail } from '@/lib/generation/write-email';
 import { editEmail, chooseDraft } from '@/lib/generation/edit-email';
-import { checkEmailQuality, repairDirective } from '@/lib/generation/email-quality';
+import { checkEmailQuality, repairDirective, checkDivergence, MIN_EMAIL_WORDS } from '@/lib/generation/email-quality';
 import { parseLinkedInUrl } from '@/lib/linkedin/url';
 import { retrieveLinkedInProfile } from '@/lib/linkedin/fetch';
 import { renderProfile } from '@/lib/linkedin/profile';
@@ -1075,7 +1075,35 @@ export async function findContactCandidatesStage(ctx: PipelineContext): Promise<
     // exactly that workflow. Index 0 stays company_signal so the ranked
     // candidate's stored `reason` text (workflowSignals[0], read below) is
     // unchanged — this only widens what role derivation is allowed to match.
-    const workflowSignals = capabilities.observed.flatMap((c) => [c.workflow, c.name]);
+    let workflowSignals = capabilities.observed.flatMap((c) => [c.workflow, c.name]);
+
+    // HUMAN-AUTHORIZED EXPLORATORY DISCOVERY.
+    //
+    // A person continuing a BORDERLINE account with no OBSERVED workflow is
+    // explicitly saying "I accept this account is borderline and I want a
+    // better contact searched for anyway" — see
+    // lib/qualification/account-decision.ts. That authorization licenses
+    // WHERE this stage looks; it changes nothing about what counts as
+    // evidence. So this only ever widens the SEARCH INPUT — the free-form
+    // signal text and capability names handed to the exact same
+    // rolesForWorkflows()/adjacentRolesForWorkflows()/etc used by the
+    // OBSERVED path below. It does not read, write or reclassify
+    // company_fit.capability_matches, and every candidate found still goes
+    // through the identical evidence, ranking and pre-verification gates.
+    //
+    // Falls back to INFERRED capabilities ONLY when there is no OBSERVED
+    // workflow AND a human has explicitly unlocked this path — never for the
+    // ordinary automatic cells (VERIFY_BETTER_CONTACT / FIND_BETTER_CONTACT),
+    // whose behavior is unchanged: a QUALIFIED company already requires an
+    // OBSERVED capability, so those cells never reach this branch.
+    const exploratoryInferredContext =
+      workflowSignals.length === 0 && contactDiscoveryUnlockedByDecision(q);
+    if (exploratoryInferredContext) {
+      workflowSignals = capabilities.inferred.flatMap((c) => {
+        const raw = ctx.qualification?.company_fit.capability_matches.find((m) => m.capability_id === c.id);
+        return raw?.company_signal ? [raw.company_signal, c.name] : [c.name];
+      });
+    }
 
     if (workflowSignals.length === 0) {
       ctx.contactCandidates = [];
@@ -1213,15 +1241,29 @@ export async function findContactCandidatesStage(ctx: PipelineContext): Promise<
     }
 
     const found = ranked.length > 0;
+    // Named explicitly wherever this path ran — never silently identical to
+    // the ordinary OBSERVED-workflow result. This is what makes requirement
+    // #5 (mark the path as human-authorized exploratory discovery) durable:
+    // it is on the persisted stage output, not just in a comment.
+    const exploratoryPrefix = exploratoryInferredContext
+      ? 'Human-authorized exploratory discovery (inferred workflow context, no observed capability) — '
+      : '';
     return {
       status: (persistenceError ? 'degraded' : 'complete') as StageStatus,
-      summary: persistenceError
-        ? `${ranked.length} candidate(s) found for ${result.roles.join(', ')} at ${company}, but they could not be saved: ${persistenceError}`
-        : found
-          ? `${ranked.length} candidate(s) found for ${result.roles.join(', ')} at ${company}.`
-          : `No verified candidates found at ${company} after ${levelsAttempted.length} discovery level(s) covering ${result.roles.join(', ')} — searched ${result.queriesOk}/${result.queriesRun} queries.`,
+      summary:
+        exploratoryPrefix +
+        (persistenceError
+          ? `${ranked.length} candidate(s) found for ${result.roles.join(', ')} at ${company}, but they could not be saved: ${persistenceError}`
+          : found
+            ? `${ranked.length} candidate(s) found for ${result.roles.join(', ')} at ${company}.`
+            : `No verified candidates found at ${company} after ${levelsAttempted.length} discovery level(s) covering ${result.roles.join(', ')} — searched ${result.queriesOk}/${result.queriesRun} queries.`),
       output: {
         applicable: true,
+        // True only when the OBSERVED path found nothing and a human
+        // explicitly continued the account — see contactDiscoveryUnlockedByDecision().
+        // Never implies the inferred capability became evidence: qualification's
+        // own capability_matches (basis/evidence) are untouched by this stage.
+        exploratory_inferred_context: exploratoryInferredContext,
         company,
         roles: result.roles,
         // Shown even when persistence failed — they were genuinely found;
@@ -1946,8 +1988,26 @@ const REPORT_OPENING =
 const COMPANY_PROFILE =
   /\b(operates as|is (a|an|the) (largest|leading|biggest|premier|foremost)?\s*[\w-]*\s*(firm|company|platform|provider|brokerage|marketplace|business)|serving (millions|thousands|[\d,]+)|handling (millions|thousands|[\d,]+)|with (a )?(market share|revenue|valuation) of|headquartered in)\b/i;
 
-/** Superlatives that pad an opener without adding an observation. */
-const SUPERLATIVE = /\b(largest|leading|biggest|foremost|premier|top-tier|world-class|renowned|prestigious|cutting-edge|state-of-the-art)\b/gi;
+/**
+ * Superlatives that pad an opener without adding an observation.
+ *
+ * "leading" is handled separately from the rest: it is the one word on this
+ * list that is also an ordinary verb form ("time leading business finance",
+ * "you're co-leading Sunday PropTech"), and the plain word-boundary match
+ * flagged that usage exactly as readily as the adjective sense ("the leading
+ * firm"). The adjective sense is reliably preceded by a determiner — "the
+ * leading X", "a leading X", "one of the leading X" — so that is what is
+ * required for "leading" specifically. Every other term here has no such
+ * verb-form ambiguity and keeps the original plain match.
+ */
+const SUPERLATIVE_HIGH_CONFIDENCE =
+  /\b(largest|biggest|foremost|premier|top-tier|world-class|renowned|prestigious|cutting-edge|state-of-the-art)\b/i;
+/** "leading" only in its adjective sense — never the verb ("leading X", "co-leading X"). */
+const SUPERLATIVE_LEADING = /\b(?:the|an?|one of the)\s+leading\b/i;
+
+function hasSuperlative(text: string): boolean {
+  return SUPERLATIVE_HIGH_CONFIDENCE.test(text) || SUPERLATIVE_LEADING.test(text);
+}
 
 /**
  * Count the independent factual clauses crammed into one sentence.
@@ -1966,9 +2026,7 @@ function countFactClauses(sentence: string): number {
     const hasFigure = /\d/.test(seg) || /\b(millions?|thousands?|billions?)\b/i.test(seg);
     // A capitalised token that is not simply the first word of the sentence.
     const hasEntity = /(?:\s)[A-Z][A-Za-z0-9&.-]{2,}/.test(seg);
-    const hasSuperlative = SUPERLATIVE.test(seg);
-    SUPERLATIVE.lastIndex = 0;
-    return hasFigure || hasEntity || hasSuperlative;
+    return hasFigure || hasEntity || hasSuperlative(seg);
   }).length;
 }
 
@@ -2009,6 +2067,45 @@ function containment(opener: string, sourceText: string): number {
  * the quote, or the signal sentence with a few words changed — factually fine,
  * but it reads like a pasted news headline and signals no actual thought.
  */
+/**
+ * Translate checkOpener()'s own recorded reason into an accurate stage
+ * summary line, instead of assuming every isHeadline failure is source
+ * restatement (the previous behaviour, which mislabeled a superlative-only
+ * failure as "restating the source").
+ *
+ * Reads `opener.reason` — already `failures[0]`, i.e. the first check that
+ * failed in checkOpener()'s own fixed evaluation order — so a message that
+ * fails more than one opener check still reports the SAME primary reason
+ * checkOpener() itself considers first. No second classification system:
+ * this only puts a name to the text checkOpener() already produced.
+ */
+export function openerFailureSummary(opener: { reason: string | null }, words: number): string {
+  const reason = opener.reason ?? '';
+  const suffix = `after one regeneration (${words} words) — sent to manual review.`;
+
+  if (/restates .+ almost verbatim/i.test(reason)) {
+    return `Draft still opens by restating the source ${suffix}`;
+  }
+  if (/superlatives?/i.test(reason) || /own size and standing/i.test(reason)) {
+    return `Draft still leans on superlative phrasing ${suffix}`;
+  }
+  if (/packs \d+ separate facts/i.test(reason)) {
+    return `Draft still stacks too many facts in the opening ${suffix}`;
+  }
+  if (/runs to \d+ words/i.test(reason)) {
+    return `Draft still opens with an overlong sentence ${suffix}`;
+  }
+  if (/research-report phrasing/i.test(reason)) {
+    return `Draft still opens with research-report phrasing ${suffix}`;
+  }
+  if (/describes the company back to itself/i.test(reason)) {
+    return `Draft still describes the company back to itself ${suffix}`;
+  }
+  // Unreachable given checkOpener()'s exhaustive checks, but never silently
+  // relabel an unrecognised reason as one of the above.
+  return `Draft still opens like a pasted headline ${suffix}`;
+}
+
 export function checkOpener(
   message: string,
   hook: { signal: string; supporting_quote?: string | null; source_title?: string | null },
@@ -2087,16 +2184,14 @@ export function checkOpener(
     // Scale-and-superlative phrasing ("running the largest X with millions of Y")
     // is the same mistake in a shorter sentence: it recites the company's own
     // size to the person who runs it instead of observing something.
-    SUPERLATIVE.lastIndex = 0;
-    const hasSuperlative = SUPERLATIVE.test(firstSentence);
-    SUPERLATIVE.lastIndex = 0;
+    const openerHasSuperlative = hasSuperlative(firstSentence);
     const hasScale = /\b(millions?|thousands?|billions?|[\d,]{4,}\+?)\b/i.test(firstSentence);
 
-    if (hasSuperlative && hasScale) {
+    if (openerHasSuperlative && hasScale) {
       failures.push(
         'The opening recites the company’s own size and standing back to them rather than making an observation.',
       );
-    } else if (hasSuperlative) {
+    } else if (openerHasSuperlative) {
       failures.push(
         'The opening leans on superlatives ("largest", "leading") instead of a specific observation.',
       );
@@ -2294,7 +2389,6 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
             senderCompany: sender.company,
             outreachContext: outreachContext(sender),
             sources: ctx.sources,
-            directive: null,
           })
         : null);
 
@@ -2305,7 +2399,7 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
     let wasEdited = false;
     if (written && brief) {
       const edited = await editEmail({ brief, message: written.message, claims: written.claims });
-      const choice = chooseDraft(brief, written, edited, ctx.hook.supporting_quote ?? null);
+      const choice = chooseDraft(brief, written, edited, ctx.hook.supporting_quote ?? null, ctx.previousMessage);
       editNote = choice.reason;
       wasEdited = choice.edited;
       written = { ...written, message: choice.message, claims: choice.claims };
@@ -2340,35 +2434,79 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
     // Voice is checked in code, not trusted to the prompt. The hook's verified
     // quote is exempted so evidence is never rewritten to satisfy a style rule.
     const voice = checkVoice(messageText, { quotes: [ctx.hook.supporting_quote] });
+    // Only meaningful on a user regeneration — ctx.previousMessage is set by
+    // regenerateMessageOnly() and stays null on every first generation, so
+    // this check never fires there. Catches the "same email, one word
+    // changed" failure the writer's regeneration instruction alone did not
+    // reliably prevent.
+    const divergence = ctx.previousMessage ? checkDivergence(messageText, ctx.previousMessage) : null;
     let finalText = messageText;
     let regenerated = false;
 
-    // One regeneration total, whichever quality check failed.
-    if (!gate.passed || opener.isHeadline || !voice.passed || !quality.passed) {
-      const directive = [
-        !gate.passed
-          ? `Your previous draft was rejected as too generic: ${gate.failures.join(' ')}`
-          : null,
-        opener.isHeadline
-          ? 'Rewrite the opening as a concise, natural observation for a human salesperson. Preserve the verified fact ' +
-            'and role relevance, but do not restate the research summary. ' +
-            `Specifically: ${opener.failures.join(' ')} ` +
-            'Aim for roughly 15-30 words, one observation, no company description, no superlatives.'
-          : null,
-        !voice.passed
-          ? 'The draft reads as generated rather than written. Fix these specific problems without ' +
-            `changing any verified fact or adding a new one: ${voice.failures.join(' ')}`
-          : null,
-        // Named failures, not "try again" — a rewrite told exactly what is
-        // wrong is far likelier to fix it.
-        !quality.passed ? repairDirective(quality, brief) : null,
-      ]
-        .filter(Boolean)
-        .join(' ');
+    // One regeneration total, whichever check failed.
+    if (!gate.passed || opener.isHeadline || !voice.passed || !quality.passed || divergence?.passed === false) {
+      const qualityDirective =
+        [
+          // "Too generic" here means specifically the personalization gate —
+          // low hook-term coverage, no stated role relevance — which is this
+          // codebase's own definition of "sales copy with a name dropped in".
+          // The prior generic nudge left the model free to fix it by
+          // inventing a plausible-sounding pain instead of tightening its
+          // grip on the verified signal and the role, which is exactly the
+          // failure mode this instruction now names directly.
+          !gate.passed
+            ? 'The previous draft avoided restating the research signal but became too generic. Do not introduce ' +
+              "an unsupported operational pain. Instead, make the opener more specific to the verified signal and " +
+              'this prospect\'s role by turning the implication into a concrete, cautious observation or question. ' +
+              `Specifically: ${gate.failures.join(' ')}`
+            : null,
+          opener.isHeadline
+            ? // The exact wording matters here: a generic "don't restate the
+              // research summary" nudge left the model free to produce a
+              // close paraphrase that still failed containment on retry. When
+              // the actual failure IS restatement, say so unambiguously and
+              // forbid the two easiest non-fixes (rewording the same sentence,
+              // narrating the same fact) by name.
+              (/restates .+ almost verbatim/i.test(opener.reason ?? '')
+                ? 'The previous opener was rejected because it restated the research signal. Do not rewrite the same ' +
+                  'sentence. Do not paraphrase the hook. Start from the implication for the prospect\'s role instead. '
+                : 'Rewrite the opening as a concise, natural observation for a human salesperson. Preserve the verified fact ' +
+                  'and role relevance, but do not restate the research summary. ') +
+              `Specifically: ${opener.failures.join(' ')} ` +
+              'Aim for roughly 15-30 words, one observation, no company description, no superlatives.'
+            : null,
+          !voice.passed
+            ? 'The draft reads as generated rather than written. Fix these specific problems without ' +
+              `changing any verified fact or adding a new one: ${voice.failures.join(' ')}`
+            : null,
+          // Named failures, not "try again" — a rewrite told exactly what is
+          // wrong is far likelier to fix it. A draft that failed ONLY on
+          // being under the word minimum gets a dedicated expansion
+          // instruction instead of the generic repair wrapper — the generic
+          // one does not tell the model HOW to add words without inventing
+          // pain or filler, which is exactly what "too short" needs to hear.
+          // Any other quality failure (including being over the max, and any
+          // combination with other failures) still goes through the
+          // existing repairDirective path, unchanged.
+          !quality.passed
+            ? quality.failures.length === 1 && quality.detail.word_count === false && quality.wordCount < MIN_EMAIL_WORDS
+              ? 'The previous draft is below the required 90-word minimum. Expand it naturally to approximately ' +
+                '100–115 words by adding substantive, prospect-specific context or a clearer role-relevant question. ' +
+                'Do not repeat the research hook, invent a business pain, or add generic filler.'
+              : repairDirective(quality, brief)
+            : null,
+        ]
+          .filter(Boolean)
+          .join(' ') || null;
 
       // Same brief, same fact, same workflow, same proof — new prose only.
       // Deliberately NOT a return to the research corpus: a prose failure must
       // not be allowed to pick a different business angle.
+      //
+      // On a regeneration, the retry stays a REGENERATION call (previousMessage
+      // carried forward) rather than falling back to the repair wrapper — the
+      // two wrappers say opposite things, and silently swapping to "change
+      // nothing else" here would recreate the exact bug this fix exists for.
       const retry = brief
         ? await writeEmailFromBrief({
             brief,
@@ -2376,10 +2514,20 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
             senderCompany: sender.company,
             outreachContext: outreachContext(sender),
             sources: ctx.sources,
-            directive,
+            ...(ctx.previousMessage
+              ? {
+                  previousMessage: ctx.previousMessage,
+                  regenerationReinforcement:
+                    divergence?.passed === false
+                      ? 'The previous regenerated version was too similar to the original. Produce substantially different sentence construction and wording.'
+                      : null,
+                  repairNotes: qualityDirective,
+                }
+              : { repairNotes: qualityDirective })
           })
         : null;
-      const retryResult = retry?.message ?? (brief ? null : await regenerateMessage(ctx, directive));
+      const retryResult =
+        retry?.message ?? (brief ? null : await regenerateMessage(ctx, qualityDirective ?? 'Rewrite this message.'));
 
       if (retryResult) {
         regenerated = true;
@@ -2395,6 +2543,10 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
     const secondOpener = checkOpener(finalText, ctx.hook);
     const secondVoice = checkVoice(finalText, { quotes: [ctx.hook.supporting_quote] });
     const secondQuality = checkEmailQuality(finalText, { brief });
+    // Re-checked against the SAME previous message, never the just-rejected
+    // first attempt — the bar is "different from what the user already has",
+    // not "different from what we just tried".
+    const secondDivergence = ctx.previousMessage ? checkDivergence(finalText, ctx.previousMessage) : null;
     const words = wordCount(finalText);
 
     await deleteDrafts(ctx.runId);
@@ -2410,7 +2562,11 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
     });
     ctx.draftId = row.id;
     const qualityPassed =
-      secondGate.passed && !secondOpener.isHeadline && secondVoice.passed && secondQuality.passed;
+      secondGate.passed &&
+      !secondOpener.isHeadline &&
+      secondVoice.passed &&
+      secondQuality.passed &&
+      secondDivergence?.passed !== false;
     ctx.messageFailedGate = !qualityPassed;
 
     return {
@@ -2418,7 +2574,7 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
       summary: qualityPassed
         ? `Personalised draft (${words} words, personalisation ${secondGate.score}/100)${regenerated ? ', regenerated once for quality' : ''}.`
         : secondOpener.isHeadline
-          ? `Draft still opens by restating the source after one regeneration (${words} words) — sent to manual review.`
+          ? openerFailureSummary(secondOpener, words)
           : !secondVoice.passed
             ? `Draft still carries generated-sounding phrasing after one regeneration (${words} words) — sent to manual review.`
             : `Draft still reads as generic after one regeneration (${words} words) — sent to manual review.`,
@@ -2465,6 +2621,17 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
         },
         email_brief: brief,
         editorial_pass: { applied: wasEdited, note: editNote },
+        // Only meaningful on a user regeneration; null on every first
+        // generation. Recorded on the SECOND (post-retry) attempt, since that
+        // is the text actually being persisted.
+        regeneration_divergence: secondDivergence
+          ? {
+              passed: secondDivergence.passed,
+              whole_message_similarity: secondDivergence.wholeMessageSimilarity,
+              opening_similarity: secondDivergence.openingSimilarity,
+              reason: secondDivergence.reason,
+            }
+          : null,
         declared_claims: analysis.messageClaims,
         information_requests: analysis.informationRequests,
         approved_solution: solutionMatch
