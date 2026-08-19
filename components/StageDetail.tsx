@@ -16,6 +16,7 @@ import { ContactCandidates } from './ContactCandidates';
 import { StatusBadge, type StatusTone } from './StatusBadge';
 import type { ContactCandidateRow } from '@/lib/contacts/types';
 import type { EvidenceItem } from '@/lib/qualification/types';
+import { buildQualificationPanels } from '@/lib/ui/qualification-panels';
 import { findSourceByUrl, displayDate } from '@/lib/research/top-sources';
 import { hostOf } from '@/lib/url-identity';
 import { currentDraftText } from '@/lib/drafts/current-text';
@@ -149,6 +150,46 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-faint">{title}</h3>
       {children}
     </section>
+  );
+}
+
+/**
+ * One self-contained box for one axis of qualification — company fit,
+ * contact fit, or the overall decision. Each box carries its own explicit
+ * label and text, so a reader never has to infer which score belongs to
+ * which question by position alone (the confusion this fixes: company fit
+ * and overall fit rendered as adjacent, unlabeled numbers read as one
+ * contradictory statement about the same thing). Color (via `tone`) is a
+ * secondary cue only — the label and text carry the meaning on their own.
+ */
+function FitPanel({
+  label,
+  tone,
+  headline,
+  score,
+  detail,
+  note,
+}: {
+  /** "Company fit" / "Contact fit" / "Overall decision" — never omitted. */
+  label: string;
+  tone: string;
+  /** e.g. "QUALIFIED", "BORDERLINE — VERIFY BETTER CONTACT" */
+  headline: string;
+  score: number;
+  /** e.g. "Evidence: OBSERVED" or "Recommended action: …" */
+  detail: React.ReactNode;
+  note?: React.ReactNode;
+}) {
+  return (
+    <div className={`rounded-lg border p-4 ${tone}`}>
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-faint">{label}</p>
+      <div className="mt-1 flex flex-wrap items-baseline justify-between gap-2">
+        <span className="text-sm font-semibold uppercase tracking-wider">{headline}</span>
+        <span className="text-sm tabular-nums opacity-80">{score}/100</span>
+      </div>
+      <p className="mt-1.5 text-sm opacity-90">{detail}</p>
+      {note ? <p className="mt-2 text-xs opacity-80">{note}</p> : null}
+    </div>
   );
 }
 
@@ -772,7 +813,12 @@ function StageBody({
       if (!fit) return null;
       const cls = String(fit.classification);
       const matches = (fit.capability_matches as Output[]) ?? [];
-      const status = String(tq?.classification ?? 'UNKNOWN');
+
+      // The run's own final, canonical qualification (same source Decision
+      // Summary and Account Decision read) rather than re-deriving company/
+      // contact state from this one stage's narrower recorded output, which
+      // never carried prospect_fit at all.
+      const panels = run.qualification ? buildQualificationPanels(run.qualification) : null;
 
       return (
         <>
@@ -857,32 +903,63 @@ function StageBody({
             </Section>
           ) : null}
 
-          {tq ? (
-            <Section title="Target qualification">
-              <div className={`rounded-lg border p-4 ${QUAL_TONE[status] ?? QUAL_TONE.BORDERLINE}`}>
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <span className="flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider">
-                    {status.replace(/_/g, ' ')}
-                    {tq.action === 'EXPLORATORY_OUTREACH' || tq.action === 'EXPLORATORY_OUTREACH_IF_SIGNAL' ? (
-                      <span className="rounded-full bg-surface/60 px-1.5 py-0.5 text-[10px] font-medium normal-case tracking-normal text-amber-900">
-                        exploratory outreach
-                      </span>
-                    ) : null}
-                  </span>
-                  <span className="text-sm tabular-nums opacity-80">
-                    overall fit {String(tq.overall_fit)}/100
-                  </span>
-                </div>
-                <p className="mt-1.5 text-sm">{String(tq.reason ?? '')}</p>
-                {tq.suggestion ? (
-                  <p className="mt-2 text-sm opacity-90">{String(tq.suggestion)}</p>
-                ) : null}
-                {tq.action ? (
-                  <p className="mt-2 text-xs font-medium opacity-90">
-                    {ACTION_LABEL[String(tq.action)] ?? ''}
-                  </p>
-                ) : null}
+          {tq && panels ? (
+            <Section title="Qualification">
+              {/*
+                Three separate, explicitly labeled boxes — company fit,
+                contact fit, overall decision — instead of one number next to
+                another. Company fit and contact fit are each the same
+                QUALIFIED/BORDERLINE/NOT_QUALIFIED scale the Decision Summary
+                and Account Decision panels use (companyFitState /
+                prospectFitState, via lib/ui/qualification-panels.ts), so a
+                reader never has to reconcile this score against a different
+                scale shown elsewhere on the page. The reported confusion
+                this replaces: a company that qualified (QUALIFIED, 60/100)
+                shown directly above an overall BORDERLINE, 45/100 box —
+                easy to misread as the company itself being borderline, when
+                the weaker CONTACT side is what drove the overall number
+                down.
+              */}
+              <div className="grid gap-3 sm:grid-cols-3">
+                <FitPanel
+                  label="Company fit"
+                  tone={QUAL_TONE[panels.company.state] ?? QUAL_TONE.BORDERLINE}
+                  headline={panels.company.state.replace(/_/g, ' ')}
+                  score={panels.company.score}
+                  detail={`Evidence: ${panels.company.evidenceBasis}`}
+                />
+                <FitPanel
+                  label="Contact fit"
+                  tone={QUAL_TONE[panels.contact.state] ?? QUAL_TONE.BORDERLINE}
+                  headline={panels.contact.state.replace(/_/g, ' ')}
+                  score={panels.contact.score}
+                  detail={`Evidence: ${panels.contact.evidenceBasis}`}
+                />
+                <FitPanel
+                  label="Overall decision"
+                  tone={QUAL_TONE[panels.overall.classification] ?? QUAL_TONE.BORDERLINE}
+                  headline={
+                    panels.overall.classification.replace(/_/g, ' ') +
+                    (panels.overall.action === 'EXPLORATORY_OUTREACH' ||
+                    panels.overall.action === 'EXPLORATORY_OUTREACH_IF_SIGNAL'
+                      ? ' · exploratory'
+                      : '')
+                  }
+                  score={panels.overall.score}
+                  detail={<>Recommended action: {ACTION_LABEL[panels.overall.action] ?? panels.overall.action}</>}
+                  note={panels.overall.suggestion ?? undefined}
+                />
               </div>
+
+              {panels.noAccountDecisionNeeded ? (
+                <p className="mt-3 rounded-lg bg-app px-3 py-2 text-xs text-muted">
+                  No Account Decision is required here — the company qualified on its own evidence.
+                  Only the submitted contact is uncertain, so the system is looking for a better
+                  contact at this same, already-qualified company.
+                </p>
+              ) : null}
+
+              <p className="mt-3 text-xs text-faint">{panels.overall.reason}</p>
               <p className="mt-2 text-xs text-faint">
                 Overall fit is the weaker of the two scores, not an average — a strong company does
                 not rescue an irrelevant prospect, and vice versa. OBSERVED means a retrieved source

@@ -8,11 +8,13 @@ import {
   updateContactCandidate,
 } from '@/lib/supabase/queries';
 import { parseLinkedInUrl } from '@/lib/linkedin/url';
+import { retrieveLinkedInProfile } from '@/lib/linkedin/fetch';
 import { research } from '@/lib/research/engine';
 import { identityQueries } from '@/lib/research/queries';
 import { verifySelectedCandidate } from '@/lib/identity/verify';
 import { decideIdentity } from '@/lib/identity/types';
 import type { IdentityCandidate } from '@/lib/identity/types';
+import { reconcileProvenance, providerFields, candidateFields, currentEmploymentConflict } from '@/lib/identity/provenance';
 import { executePipeline } from '@/lib/pipeline/execute';
 import { checkRateLimit } from '@/lib/rate-limit';
 import type { ContactCandidateStatus } from '@/lib/contacts/types';
@@ -146,6 +148,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     origin: 'public_research',
   };
 
+  // The candidate's ACTUAL current profile — the same fetch identify_prospect
+  // already makes for every ordinary run, just made here, before the
+  // accept/reject decision, instead of after. Without this, a discovered
+  // candidate's claimed company/role were only ever checked against sources
+  // the verification MODEL synthesized (CANDIDATE-provenance, never
+  // authoritative — see reconcileProvenance below), so a former employee
+  // whose public sources plainly describe a job change still verified as
+  // VERIFIED for the OLD company: the model correctly reported the conflict,
+  // but nothing downstream had the standing to act on it. The real profile
+  // is what gives a company/role mismatch that standing.
+  const profileResult = await retrieveLinkedInProfile(parsed.normalized_url);
+
   // Targeted corroboration for THIS person — the same call verifyIdentityStage
   // makes, not general company research.
   const corroboration = await research(
@@ -162,19 +176,51 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     sources: corroboration.sources,
   });
 
+  // A deterministic fallback for the case the model's own search-based
+  // conflict detection can miss entirely: a candidate whose only evidence is
+  // old enough that nothing in it, or in the sources the model was shown,
+  // says anything about departure — so the model reports no conflict at
+  // all. reconcileProvenance only relabels conflicts it is given; it never
+  // invents one. This adds the one direct check that closes that gap: does
+  // the person's OWN fetched profile actually still say this company? If
+  // the model already raised its own company conflict, this defers to it
+  // entirely rather than duplicating it.
+  const hasModelCompanyConflict = evidence.conflicts.some((c) => c.field === 'company');
+  const employmentConflict = hasModelCompanyConflict
+    ? null
+    : currentEmploymentConflict(seed.company, profileResult.profile?.currentCompany?.name ?? null);
+  const conflictsToReconcile = employmentConflict ? [...evidence.conflicts, employmentConflict] : evidence.conflicts;
+
+  // Same reconciliation verifyIdentityStage runs: a conflict on a field the
+  // real profile itself speaks to (e.g. company, when the profile shows a
+  // different current employer) is promoted to PROFILE provenance and can
+  // block; a conflict the model raised with nothing but its own synthesis
+  // behind it stays CANDIDATE-provenance and does not. This is what lets
+  // "former CFO here, current CFO elsewhere" actually hold for review instead
+  // of silently verifying against the stale claim.
+  const reconciled = reconcileProvenance({
+    profileFields: providerFields(profileResult.profile),
+    hints: { name: null, role: null, company: null },
+    candidate: candidateFields(seed),
+    conflicts: conflictsToReconcile,
+    corroboratedFields: evidence.corroboratedFields,
+  });
+  const resolved = { ...seed, ...reconciled.fields };
+
   const verification = decideIdentity({
-    selected: seed,
+    selected: resolved,
     selectionMethod: 'USER_CONFIRMED',
+    provenance: reconciled.provenance,
     profile: {
-      name: seed.name,
-      role: seed.role,
-      company: seed.company,
-      location: null,
-      linkedin_url: parsed.normalized_url,
+      name: resolved.name,
+      role: resolved.role,
+      company: resolved.company,
+      location: resolved.location,
+      linkedin_url: resolved.linkedin_url ?? parsed.normalized_url,
     },
-    hasProfile: false,
+    hasProfile: Boolean(profileResult.profile),
     candidates: [seed],
-    conflicts: evidence.conflicts,
+    conflicts: reconciled.conflicts,
     assessedConfidence: evidence.assessedConfidence,
     missingFields: evidence.missingFields,
   });

@@ -84,6 +84,75 @@ export function roleMatches(proposedRole: string, targetRoles: string[]): boolea
   });
 }
 
+/** Who the current run is already about — the identity a proposed candidate must never turn out to be. */
+export interface CurrentProspectIdentity {
+  linkedin_url: string | null;
+  name: string | null;
+  company: string | null;
+}
+
+function normalizeForComparison(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Is this proposed candidate actually the prospect this run is already
+ * about? Contact discovery must never suggest a run's own subject back as
+ * an "alternative contact" at their own company.
+ *
+ * Prefers the LinkedIn URL: both sides are already canonicalized through
+ * parseLinkedInUrl() before this is called, so an exact match is unambiguous
+ * identity. Falls back to normalized name + company only when a URL
+ * comparison is not possible — a weaker signal, and why BOTH must match:
+ * matching on name alone would wrongly exclude a different person who
+ * happens to share a name at the same company.
+ */
+export function isCurrentProspect(
+  candidate: { name: string; linkedin_url: string | null; company: string | null },
+  current: CurrentProspectIdentity,
+): boolean {
+  if (candidate.linkedin_url && current.linkedin_url) {
+    return candidate.linkedin_url.toLowerCase() === current.linkedin_url.toLowerCase();
+  }
+  if (!current.name || !current.company || !candidate.company) return false;
+  return (
+    normalizeForComparison(candidate.name) === normalizeForComparison(current.name) &&
+    normalizeForComparison(candidate.company) === normalizeForComparison(current.company)
+  );
+}
+
+/** The identity fields a persisted or proposed candidate is deduplicated on. */
+export interface CandidateIdentityKey {
+  linkedin_url: string | null;
+  name: string | null;
+  company: string | null;
+}
+
+/**
+ * Is `a` the same real person as `b`? Used to keep a pipeline retry from
+ * persisting the same discovered candidate a second time — createContactCandidates()
+ * is a plain insert with no uniqueness constraint of its own, so this is the
+ * check that gives it one.
+ *
+ * Same shape as isCurrentProspect() above, for the same reason: prefer the
+ * LinkedIn URL (both sides are already canonicalized through
+ * parseLinkedInUrl() before either function ever sees them, so an exact
+ * match is unambiguous identity), and fall back to normalized name + company
+ * only when a URL comparison is not possible. Requiring BOTH name and
+ * company in the fallback is what keeps a different person at the same
+ * company from being wrongly collapsed into one row.
+ */
+export function isDuplicateCandidate(a: CandidateIdentityKey, b: CandidateIdentityKey): boolean {
+  if (a.linkedin_url && b.linkedin_url) {
+    return a.linkedin_url.toLowerCase() === b.linkedin_url.toLowerCase();
+  }
+  if (!a.name || !b.name || !a.company || !b.company) return false;
+  return (
+    normalizeForComparison(a.name) === normalizeForComparison(b.name) &&
+    normalizeForComparison(a.company) === normalizeForComparison(b.company)
+  );
+}
+
 /** Tier 1 keeps the full seniority weight, Tier 2 two-thirds, Tier 3 one-third. */
 const TIER_WEIGHT: Record<number, number> = { 1: 1, 2: 2 / 3, 3: 1 / 3 };
 

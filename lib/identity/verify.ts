@@ -48,7 +48,20 @@ RULES
     conflict, not corroboration. Say so.
   - Absence of evidence is not conflict. If sources simply do not mention this
     person, report low confidence and missing fields — not a contradiction.
-  - A documented job change is not a conflict; note the current role.
+  - A documented job change is not a conflict — only when a source explicitly
+    says the earlier company/role ENDED (e.g. "former", "stepped down", "left",
+    "until [date]", or a stated end date). In that case do not report a
+    conflict; note the current role instead.
+  - A source naming a DIFFERENT company or role from the candidate's, with no
+    indication the earlier one ended, is NOT automatically a job change. People
+    commonly hold two roles at once (e.g. a company executive who also founded
+    or leads a separate foundation or side project). Treat present-tense
+    language with no departure/end date, or explicit concurrent phrasing
+    ("also", "and", "in addition to", "as well as"), as evidence of a possible
+    CONCURRENT role, not a supersession. Report this AS a conflicts entry
+    (field: company or role, as applicable) — do not silently drop either side
+    — and say explicitly in its explanation that this may be a concurrent role
+    rather than a job change, so it is not auto-resolved either way.
   - Never invent a person, employer, role or source.
   - Do not decide the outcome, and do not narrate your reasoning. Report evidence.`;
 

@@ -4,6 +4,7 @@ import {
   providerFields,
   fieldProvenance,
   candidateFields,
+  currentEmploymentConflict,
 } from '@/lib/identity/provenance';
 import {
   decideIdentity,
@@ -315,5 +316,55 @@ describe('runs persisted before provenance existed keep their meaning', () => {
     const c = normalizeConflict({ field: 'role', profile_value: 'old', claimed_value: 'new', claimed_provenance: 'CANDIDATE' });
     expect(c.claimed_value).toBe('new');
     expect(c.claimed_provenance).toBe('CANDIDATE');
+  });
+});
+
+describe('currentEmploymentConflict — the deterministic fallback the Maneesh Arora / AJIO fix added', () => {
+  // Closes the gap reconcileProvenance itself cannot: it only relabels
+  // conflicts it is handed, so a candidate whose only evidence is old
+  // enough that the verification model reports nothing still needs SOME
+  // direct check against the person's own current profile.
+
+  it('no conflict when the profile agrees with the claim', () => {
+    expect(currentEmploymentConflict('AJIO.com', 'AJIO.com')).toBeNull();
+  });
+
+  it('no conflict on trivial naming differences — reuses the same fuzzy match the rest of identity uses', () => {
+    expect(currentEmploymentConflict('AJIO.com', 'AJIO')).toBeNull();
+  });
+
+  it('a real mismatch produces a company conflict, provenance CANDIDATE (reconcileProvenance settles the real provenance)', () => {
+    // Bluewave Freight is not a known corporate relative of AJIO.com — a
+    // genuinely unrelated employer, unlike the AJIO/Reliance Retail pair
+    // covered separately below (see corporate-groups.test.ts).
+    const c = currentEmploymentConflict('AJIO.com', 'Bluewave Freight');
+    expect(c).not.toBeNull();
+    expect(c!.field).toBe('company');
+    expect(c!.claimed_value).toBe('AJIO.com');
+    expect(c!.public_value).toBe('Bluewave Freight');
+    expect(c!.claimed_provenance).toBe('CANDIDATE');
+  });
+
+  it('never fabricates a conflict when either value is unknown — absence is not evidence of a mismatch', () => {
+    expect(currentEmploymentConflict(null, 'Bluewave Freight')).toBeNull();
+    expect(currentEmploymentConflict('AJIO.com', null)).toBeNull();
+    expect(currentEmploymentConflict(null, null)).toBeNull();
+  });
+
+  it('flows through reconcileProvenance to PROFILE provenance and blocks decideIdentity, exactly like a model-reported conflict on a profile-sourced field', () => {
+    const conflict = currentEmploymentConflict('AJIO.com', 'Bluewave Freight')!;
+    const reconciled = reconcileProvenance({
+      profileFields: { name: 'Maneesh Arora', role: 'Group Chief Financial Officer', company: 'Bluewave Freight', location: null },
+      hints: { name: null, role: null, company: null },
+      candidate: { name: 'Maneesh Arora', role: 'CFO', company: 'AJIO.com', location: null },
+      conflicts: [conflict],
+      corroboratedFields: [],
+    });
+
+    expect(reconciled.conflicts[0].claimed_provenance).toBe('PROFILE');
+
+    const v = decide({ conflicts: reconciled.conflicts });
+    expect(v.status).toBe('AMBIGUOUS');
+    expect(v.proceed).toBe(false);
   });
 });

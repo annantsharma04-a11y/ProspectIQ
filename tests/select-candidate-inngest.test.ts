@@ -23,6 +23,7 @@ const mockFindOrCreateProspect = vi.fn();
 const mockUpdateContactCandidate = vi.fn();
 const mockResearch = vi.fn();
 const mockVerifySelectedCandidate = vi.fn();
+const mockRetrieveLinkedInProfile = vi.fn();
 const mockDecideIdentity = vi.fn();
 const mockExecutePipeline = vi.fn();
 const mockCheckRateLimit = vi.fn();
@@ -46,6 +47,10 @@ vi.mock('@/lib/research/engine', () => ({
 
 vi.mock('@/lib/identity/verify', () => ({
   verifySelectedCandidate: (...a: unknown[]) => mockVerifySelectedCandidate(...a),
+}));
+
+vi.mock('@/lib/linkedin/fetch', () => ({
+  retrieveLinkedInProfile: (...a: unknown[]) => mockRetrieveLinkedInProfile(...a),
 }));
 
 vi.mock('@/lib/identity/types', () => ({
@@ -121,7 +126,14 @@ beforeEach(() => {
   mockClaimContactCandidateForSelection.mockResolvedValue({ ...candidate(), selected_at: '2026-08-18T00:00:01Z' });
   mockGetContactCandidate.mockResolvedValue(candidate());
   mockResearch.mockResolvedValue({ sources: [] });
-  mockVerifySelectedCandidate.mockResolvedValue({ conflicts: [], assessedConfidence: 90, missingFields: [] });
+  mockRetrieveLinkedInProfile.mockResolvedValue({
+    profile: null,
+    access: { directLinkedIn: false, primarySource: 'public_web', profileCompleteness: 'none', reason: null },
+    meta: null,
+    error_code: 'no_token',
+    duration_ms: 0,
+  });
+  mockVerifySelectedCandidate.mockResolvedValue({ conflicts: [], assessedConfidence: 90, missingFields: [], corroboratedFields: [] });
   // VERIFIED and proceeding — the branch that reaches run creation and dispatch.
   mockDecideIdentity.mockReturnValue({ status: 'VERIFIED', proceed: true });
   mockFindOrCreateProspect.mockResolvedValue({ prospect: { id: 'prospect-1' }, created: true });
