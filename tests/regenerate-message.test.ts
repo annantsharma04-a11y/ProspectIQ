@@ -172,6 +172,43 @@ const source = (over: Partial<SourceRow> = {}): SourceRow =>
     ...over,
   }) as SourceRow;
 
+/**
+ * The pipeline now makes two differently-shaped model calls: the research pass
+ * (analyze_prospect) and the dedicated email writer (write_outreach_email).
+ * Route by the purpose the production code declares, so each call gets the
+ * shape it actually expects.
+ */
+/** A regenerated draft that clears every check on the first attempt. */
+const FRESH_MESSAGE = [
+  'Hi there, noticed PRISM realigned its finance operations leadership recently.',
+  'As that structure settles, keeping vendor payment volume, invoice matching and reconciliation ' +
+    'consistent across the finance function takes real coordination between the teams involved.',
+  'Zamp can process invoices, match and reconcile payables against purchase orders, flag the ' +
+    'exceptions that need a human, and run accounts payable workflows end to end across the group.',
+  "I'd be keen to understand how your team handles that today and where we could be useful. " +
+    'Would be great to compare notes on a short call.',
+].join('\n\n');
+
+function routeByPurpose(analysis: unknown, message: string, claims: unknown[]) {
+  return (args: { purpose: string }) => {
+    if (args.purpose === 'write_outreach_email') {
+      return Promise.resolve({
+        data: { subject: 'Invoice processing', message, messageClaims: claims },
+        meta: { model: 'test', used_fallback_model: false, purpose: 'write_outreach_email', duration_ms: 1, attempts: 1, total_tokens: null },
+      });
+    }
+    // The editorial pass returns the draft unchanged, which chooseDraft()
+    // treats as "no edit" and keeps the written version.
+    if (args.purpose === 'edit_outreach_email') {
+      return Promise.resolve({
+        data: { message, changed: false, messageClaims: claims },
+        meta: { model: 'test', used_fallback_model: false, purpose: 'edit_outreach_email', duration_ms: 1, attempts: 1, total_tokens: null },
+      });
+    }
+    return Promise.resolve(analysis);
+  };
+}
+
 function goodModelResponse(overrides: Record<string, unknown> = {}) {
   return {
     data: {
@@ -184,9 +221,19 @@ function goodModelResponse(overrides: Record<string, unknown> = {}) {
       insufficientEvidence: false, insufficientReason: null,
       outreachAngle: 'The recent finance leadership realignment.',
       suggestedSubject: 'Quick question about PRISM finance ops',
-      suggestedMessage:
-        'Hi there, noticed PRISM realigned its finance operations leadership recently — curious how the ' +
-        'new structure is handling vendor payment volume. Worth a quick chat?',
+      // Updated for the Phase 3 quality bar (checkEmailQuality): 3-4
+      // paragraphs, 90-130 words, product described as work, collaborative
+      // close, no em dash. The opening clause is unchanged, because it is a
+      // paraphrase of the hook rather than a restatement of it.
+      suggestedMessage: [
+        'Hi there, noticed PRISM realigned its finance operations leadership recently.',
+        'As that structure settles, keeping vendor payment volume, invoice matching and reconciliation ' +
+          'consistent across the finance function takes real coordination between the teams involved.',
+        'Zamp can process invoices, match and reconcile payables against purchase orders, flag the ' +
+          'exceptions that need a human, and run accounts payable workflows end to end across the group.',
+        "I'd be keen to understand how your team handles that today and where we could be useful. " +
+          'Would be great to compare notes on a short call.',
+      ].join('\n\n'),
       messageClaims: [],
       confidence: 78,
       informationRequests: [],
@@ -220,20 +267,23 @@ describe('regenerateMessageOnly — reuses the selected hook, forces a fresh mod
   it('calls the model with a rewrite instruction, not a plain re-ask', async () => {
     // generateMessageStage's own pre-existing one-retry-on-failed-checks policy
     // can add a second model call after ours — same response both times.
-    mockCallStructured.mockResolvedValue(goodModelResponse());
+    mockCallStructured.mockImplementation(routeByPurpose(goodModelResponse(), FRESH_MESSAGE, []));
 
     await regenerateMessageOnly(RUN_ID);
 
-    expect(mockCallStructured).toHaveBeenCalled();
-    const call = mockCallStructured.mock.calls[0][0];
-    expect(call.input).toContain('REWRITE INSTRUCTION');
-    expect(call.input).toMatch(/genuinely different version/i);
+    // The rewrite now goes to the dedicated writer, carrying the run's settled
+    // brief plus the instruction — not back to the research corpus.
+    const write = mockCallStructured.mock.calls.map((c) => c[0]).find((c) => c.purpose === 'write_outreach_email');
+    expect(write).toBeDefined();
+    expect(write!.input).toContain('EMAIL BRIEF');
+    expect(write!.input).toMatch(/REWRITE/);
+    expect(write!.input).toMatch(/genuinely different version/i);
     // The prior draft was NOT reused — the model was asked to write anew.
-    expect(call.input).not.toContain('OLD DRAFT TEXT');
+    expect(write!.input).not.toContain('OLD DRAFT TEXT');
   });
 
   it('does not re-run research, qualification, or signal extraction', async () => {
-    mockCallStructured.mockResolvedValue(goodModelResponse());
+    mockCallStructured.mockImplementation(routeByPurpose(goodModelResponse(), FRESH_MESSAGE, []));
 
     await regenerateMessageOnly(RUN_ID);
 
@@ -241,13 +291,13 @@ describe('regenerateMessageOnly — reuses the selected hook, forces a fresh mod
     // sources are read exactly once (by rehydrate()), never re-fetched or
     // re-searched, regardless of how many model calls the quality gate makes.
     expect(mockListSources).toHaveBeenCalledTimes(1);
-    expect(mockCallStructured.mock.calls.length).toBeGreaterThanOrEqual(1);
-    expect(mockCallStructured.mock.calls.length).toBeLessThanOrEqual(2);
+    // One write plus one editorial pass; a quality failure may add one retry.
+    expect(mockCallStructured.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(mockCallStructured.mock.calls.length).toBeLessThanOrEqual(3);
   });
 
   it('saves a genuinely new draft — deletes the old one, creates a new one with the fresh text', async () => {
-    const fresh = goodModelResponse();
-    mockCallStructured.mockResolvedValueOnce(fresh);
+    mockCallStructured.mockImplementation(routeByPurpose(goodModelResponse(), FRESH_MESSAGE, []));
 
     await regenerateMessageOnly(RUN_ID);
 
@@ -260,7 +310,7 @@ describe('regenerateMessageOnly — reuses the selected hook, forces a fresh mod
   });
 
   it('runs claim validation on the new draft', async () => {
-    mockCallStructured.mockResolvedValueOnce(goodModelResponse());
+    mockCallStructured.mockImplementation(routeByPurpose(goodModelResponse(), FRESH_MESSAGE, []));
 
     await regenerateMessageOnly(RUN_ID);
 
@@ -270,7 +320,7 @@ describe('regenerateMessageOnly — reuses the selected hook, forces a fresh mod
   });
 
   it('finalizes the run to a real terminal status, not left running', async () => {
-    mockCallStructured.mockResolvedValueOnce(goodModelResponse());
+    mockCallStructured.mockImplementation(routeByPurpose(goodModelResponse(), FRESH_MESSAGE, []));
 
     await regenerateMessageOnly(RUN_ID);
 
@@ -283,7 +333,9 @@ describe('regenerateMessageOnly — reuses the selected hook, forces a fresh mod
 
 describe('regenerateMessageOnly — failure and precondition handling', () => {
   it('when the model returns no usable text, the existing draft is preserved and the run status is restored', async () => {
-    mockCallStructured.mockResolvedValueOnce(goodModelResponse({ suggestedMessage: '' }));
+    // The writer is what produces the email now, so an unusable rewrite is an
+    // empty message from write_outreach_email.
+    mockCallStructured.mockImplementation(routeByPurpose(goodModelResponse(), '', []));
 
     await expect(regenerateMessageOnly(RUN_ID)).rejects.toThrow(/could not produce a new draft/i);
 
@@ -353,12 +405,18 @@ const identityVerification = (over: Partial<IdentityVerification> = {}): Identit
 // tests/solution-fit-e2e.test.ts, where this exact pairing was verified
 // against checkPersonalization/checkOpener/checkVoice directly.
 const VERIFIED_HOOK_SIGNAL = 'Bluewave Freight is consolidating vendor invoicing across three regional entities this quarter.';
-const CLEAN_MESSAGE =
-  "Priya, saw Bluewave pulling its regional vendor invoicing into one workflow this quarter. " +
+// Updated for the Phase 3 quality bar, same as tests/solution-fit-e2e.ts. The
+// old text described the product as "AI agents that handle...", which
+// checkEmailQuality() now correctly rejects as product-category language.
+const CLEAN_MESSAGE = [
+  "Priya, saw Bluewave pulling its regional vendor invoicing into one workflow this quarter.",
   "Consolidations like that usually mean someone has to standardize invoice matching and reconciliation " +
-  "across the merged entities before it settles into a routine process. We build AI agents that handle " +
-  "accounts payable automation, invoice processing and payables matching for finance teams doing exactly " +
-  "that. Worth comparing notes on how the transition is going?";
+    "across the merged entities before it settles into a routine process.",
+  "Zamp can process invoices, match and reconcile payables against purchase orders, and run accounts " +
+    "payable automation end to end across those entities.",
+  "I'd be keen to understand how the transition is being handled today and where we could be useful. " +
+    "Would be great to compare notes on a short call whenever it suits.",
+].join("\n\n");
 
 const verifiedRunSelectHookStage = (): RunStageRow =>
   ({
@@ -435,14 +493,16 @@ describe('regenerateMessageOnly — identity is reused, not re-litigated', () =>
     mockListSources.mockResolvedValue([
       source({ content: 'Bluewave Freight is consolidating vendor invoicing across three regional entities this quarter.' }),
     ]);
-    mockCallStructured.mockResolvedValue(cleanModelResponse());
+    mockCallStructured.mockImplementation(routeByPurpose(cleanModelResponse(), CLEAN_MESSAGE, []));
 
     await regenerateMessageOnly(RUN_ID);
 
     // The clean message cleared every gate on the first attempt — no forced
     // internal retry, so the identity fix is what's under test here, not a
     // lucky pass on a second try.
-    expect(mockCallStructured).toHaveBeenCalledTimes(1);
+    // Exactly one write and one edit — no forced regeneration.
+    const purposes = mockCallStructured.mock.calls.map((c) => (c[0] as { purpose: string }).purpose);
+    expect(purposes.filter((p) => p === 'write_outreach_email')).toHaveLength(1);
 
     const statuses = mockUpdateRun.mock.calls.map((c) => c[1]);
     const final = statuses[statuses.length - 1];
@@ -474,7 +534,7 @@ describe('regenerateMessageOnly — identity is reused, not re-litigated', () =>
     mockListSources.mockResolvedValue([
       source({ content: 'Bluewave Freight is consolidating vendor invoicing across three regional entities this quarter.' }),
     ]);
-    mockCallStructured.mockResolvedValue(cleanModelResponse());
+    mockCallStructured.mockImplementation(routeByPurpose(cleanModelResponse(), CLEAN_MESSAGE, []));
 
     await regenerateMessageOnly(RUN_ID);
 
@@ -507,7 +567,7 @@ describe('regenerateMessageOnly — identity is reused, not re-litigated', () =>
     mockListSources.mockResolvedValue([
       source({ content: 'Bluewave Freight is consolidating vendor invoicing across three regional entities this quarter.' }),
     ]);
-    mockCallStructured.mockResolvedValue(cleanModelResponse());
+    mockCallStructured.mockImplementation(routeByPurpose(cleanModelResponse(), CLEAN_MESSAGE, []));
 
     await regenerateMessageOnly(RUN_ID);
 
@@ -538,7 +598,7 @@ describe('regenerateMessageOnly — identity is reused, not re-litigated', () =>
     mockListSources.mockResolvedValue([
       source({ content: 'Bluewave Freight is consolidating vendor invoicing across three regional entities this quarter.' }),
     ]);
-    mockCallStructured.mockResolvedValue(cleanModelResponse());
+    mockCallStructured.mockImplementation(routeByPurpose(cleanModelResponse(), CLEAN_MESSAGE, []));
 
     await expect(regenerateMessageOnly(RUN_ID)).resolves.not.toThrow();
   });

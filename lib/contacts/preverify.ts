@@ -138,7 +138,9 @@ export function companyAppearsIn(company: string, haystack: string): boolean {
  */
 export function nameMatchesProfileSlug(name: string, nameHint: string | null): boolean | null {
   if (!nameHint) return null;
-  const nameTokens = new Set(tokens(name));
+  const nameTokens = tokens(name);
+  if (nameTokens.length === 0) return null;
+
   // Only NAME-LIKE hint tokens can evidence a conflict. An opaque vanity slug
   // ("/in/xk8f2p") still yields a hint string, but one that carries no claim
   // about who the person is — treating that as a mismatch would block a
@@ -146,8 +148,68 @@ export function nameMatchesProfileSlug(name: string, nameHint: string | null): b
   // that genuinely assert a name, and "/in/rahul-mehta" against "Jane Kapoor"
   // is still caught.
   const hintTokens = tokens(nameHint).filter((t) => /^[a-z]+$/.test(t));
-  if (nameTokens.size === 0 || hintTokens.length === 0) return null;
-  return hintTokens.some((t) => nameTokens.has(t));
+  if (hintTokens.length === 0) return null;
+
+  // The separated form: "/in/pramod-adiddam", "/in/rahul-mehta". One shared
+  // name token is enough, because a slug that names a DIFFERENT person shares
+  // none.
+  const nameSet = new Set(nameTokens);
+  if (hintTokens.some((t) => nameSet.has(t))) return true;
+
+  // The RUN-TOGETHER forms, which the token comparison above cannot see
+  // because LinkedIn emits them as a single word:
+  //
+  //   /in/pramodadiddam   full name, no separator
+  //   /in/padiddam        first initial + surname  ← the live false negative
+  //   /in/pramoda         first name + surname initial
+  //
+  // Checked by composing the candidate's own name tokens and comparing whole
+  // strings, so this can only ever RECOGNISE a slug the person's real name
+  // could have produced. It never matches a slug built from a different name:
+  // "rahul-mehta" tokenizes to two words and composes to "rahulmehta" /
+  // "rmehta", none of which any composition of "Pramod Adiddam" yields.
+  const compact = hintTokens.join('');
+  if (compositionsOf(nameTokens).has(compact)) return true;
+
+  return false;
+}
+
+/**
+ * Every run-together slug the parts of a real name could legitimately produce.
+ *
+ * Deliberately built FROM the candidate's name rather than by parsing the
+ * slug: the question is "could this person's name have produced this slug?",
+ * and generating the small set of legitimate answers is verifiable in a way
+ * that guessing where a surname starts inside an opaque string is not.
+ *
+ * Initials are only ever taken from a token the name actually contains, so no
+ * composition here can match a slug naming somebody else.
+ */
+function compositionsOf(nameTokens: string[]): Set<string> {
+  const out = new Set<string>();
+  if (nameTokens.length === 0) return out;
+
+  const first = nameTokens[0];
+  const last = nameTokens[nameTokens.length - 1];
+
+  // Whole name, in order and — for two-part names — reversed, since both
+  // "pramodadiddam" and "adiddampramod" are slugs people genuinely use.
+  out.add(nameTokens.join(''));
+  if (nameTokens.length === 2) out.add(`${last}${first}`);
+
+  // Initial + surname, and forename + surname initial.
+  out.add(`${first[0]}${last}`);
+  out.add(`${first}${last[0]}`);
+  // Both initials, for a middle-name-bearing name: "p" + "a".
+  if (nameTokens.length >= 2) out.add(nameTokens.map((t) => t[0]).join(''));
+
+  // First and last only, skipping any middle names.
+  if (nameTokens.length > 2) {
+    out.add(`${first}${last}`);
+    out.add(`${first[0]}${last}`);
+  }
+
+  return out;
 }
 
 /**

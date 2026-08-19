@@ -64,6 +64,13 @@ export interface PipelineContext {
   draftId: string | null;
   /** True when the draft still read as generic after one regeneration. */
   messageFailedGate: boolean;
+  /**
+   * An email already written for this run, set by a user-requested
+   * regeneration. Written OUTSIDE the stage so a writer failure can be
+   * reported without marking the stage — and therefore the run — failed.
+   * Consumed and cleared by generateMessageStage.
+   */
+  pendingMessage: { subject: string; message: string; claims: unknown[] } | null;
   validation: ValidationResult | null;
 
   /**
@@ -100,6 +107,7 @@ export function newContext(run: RunRow): PipelineContext {
     hookSignalId: null,
     draftId: null,
     messageFailedGate: false,
+    pendingMessage: null,
     validation: null,
     contactCandidates: null,
   };

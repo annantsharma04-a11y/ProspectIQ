@@ -6,7 +6,16 @@ import { currentDraftText } from '@/lib/drafts/current-text';
 
 /** Strip internal "[automatic]" markers from reader-facing text. */
 function humanize(text: string): string {
-  return text.replace(/\[automatic\]\s*/g, '').replace(/\s+/g, ' ').trim();
+  return text
+    .replace(/\[automatic\]\s*/g, '')
+    .replace(/\[auto-revised\]\s*/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Set when claim validation found an unsupported claim and it was removed automatically. */
+function wasAutoRevised(notes: string | null): boolean {
+  return Boolean(notes?.includes('[auto-revised]'));
 }
 
 const VERDICT_STYLE: Record<string, string> = {
@@ -134,6 +143,16 @@ export function DraftReviewCard({
               }`}
             >
               {draft.validation_status}
+            </span>
+          )}
+          {/* States that an edit happened, without exposing the model's
+              reasoning about it. The claim breakdown below is unchanged. */}
+          {wasAutoRevised(draft.validation_notes) && (
+            <span
+              className="rounded-full bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent"
+              title="An unsupported claim was found and removed, then the message was validated again."
+            >
+              Automatically revised after claim validation
             </span>
           )}
           <button

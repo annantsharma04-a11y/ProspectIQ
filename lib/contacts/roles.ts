@@ -22,7 +22,17 @@ interface RoleFamily {
    */
   id?: string;
   keywords: RegExp;
+  /** Tier 1 — the senior owners. Searched first, and ranked highest. */
   roles: string[];
+  /**
+   * The WORKFLOW NOUNS this family owns, used to build Tier 2/3 titles.
+   *
+   * Deliberately nouns rather than three hand-maintained title lists: the
+   * seniority ladder is the same everywhere ("Director of X", "X Manager"),
+   * so only the function differs per family. Writing the function once keeps
+   * the three tiers from drifting apart, and keeps the lexicon auditable.
+   */
+  functions: string[];
 }
 
 const FAMILIES: RoleFamily[] = [
@@ -30,10 +40,12 @@ const FAMILIES: RoleFamily[] = [
     id: 'accounts_payable',
     keywords: /\b(accounts? payable|invoice|payment (dispute|processing|ops)|vendor payment|expense management|ap automation)\b/i,
     roles: ['CFO', 'VP Finance', 'Controller', 'Head of Accounts Payable', 'Finance Operations Director'],
+    functions: ['Accounts Payable', 'Finance Operations', 'Invoice Processing'],
   },
   {
     keywords: /\b(accounts? receivable|billing|collections|revenue operations|revops)\b/i,
     roles: ['CFO', 'VP Finance', 'Revenue Operations Lead', 'Head of Billing', 'Controller'],
+    functions: ['Accounts Receivable', 'Billing', 'Collections'],
   },
   {
     // Distinct from the AP family above: AP is about paying out invoices,
@@ -41,47 +53,58 @@ const FAMILIES: RoleFamily[] = [
     // — a different function with different owners, even at the same company.
     keywords: /\b(chargebacks?|dispute handling|payment disputes?|payments? risk|dispute resolution|fraud)\b/i,
     roles: ['Head of Payments', 'VP Payments', 'Head of Risk', 'Fraud and Risk Director'],
+    functions: ['Payments', 'Risk', 'Fraud Prevention', 'Disputes'],
   },
   {
     id: 'procurement',
     keywords: /\b(procurement|sourcing|vendor management|supply chain)\b/i,
     roles: ['Head of Procurement', 'VP Supply Chain', 'Chief Procurement Officer', 'Sourcing Director'],
+    functions: ['Procurement', 'Sourcing', 'Vendor Management'],
   },
   {
     keywords: /\b(engineering|infrastructure|platform|devops|reliability|sre)\b/i,
     roles: ['VP Engineering', 'CTO', 'Head of Infrastructure', 'Engineering Director'],
+    functions: ['Engineering', 'Infrastructure', 'Platform'],
   },
   {
     keywords: /\b(data (pipeline|infrastructure|platform)|analytics engineering|data engineering)\b/i,
     roles: ['Head of Data', 'VP Data', 'Data Platform Lead', 'Chief Data Officer'],
+    functions: ['Data', 'Data Platform', 'Analytics'],
   },
   {
     keywords: /\b(security|compliance|risk|kyc|aml|fraud)\b/i,
     roles: ['Chief Compliance Officer', 'Head of Risk', 'CISO', 'Head of Trust and Safety'],
+    functions: ['Compliance', 'Risk', 'Trust and Safety', 'KYC Operations'],
   },
   {
     keywords: /\b(customer support|customer success|support operations)\b/i,
     roles: ['VP Customer Success', 'Head of Support', 'Customer Operations Director'],
+    functions: ['Customer Support', 'Customer Success', 'Support Operations'],
   },
   {
     keywords: /\b(hr|hiring|recruiting|talent|people operations|onboarding)\b/i,
     roles: ['VP People', 'Head of Talent', 'Chief People Officer', 'HR Operations Lead'],
+    functions: ['People Operations', 'Talent', 'HR Operations'],
   },
   {
     keywords: /\b(sales operations|sales ops|crm|pipeline management)\b/i,
     roles: ['VP Sales Operations', 'Head of RevOps', 'Sales Operations Director'],
+    functions: ['Sales Operations', 'Revenue Operations'],
   },
   {
     keywords: /\b(marketing operations|martech|campaign management)\b/i,
     roles: ['VP Marketing Operations', 'Head of Marketing Ops', 'Marketing Technology Lead'],
+    functions: ['Marketing Operations', 'Campaign Operations'],
   },
   {
     keywords: /\b(legal|contract management|regulatory)\b/i,
     roles: ['General Counsel', 'Head of Legal', 'VP Legal'],
+    functions: ['Legal', 'Contracts'],
   },
   {
     keywords: /\b(operations|logistics|fulfillment|warehouse)\b/i,
     roles: ['COO', 'VP Operations', 'Head of Operations'],
+    functions: ['Operations', 'Logistics', 'Fulfillment'],
   },
 ];
 
@@ -183,6 +206,92 @@ export function adjacentRolesForWorkflows(
 
   const roles = FAMILIES.filter((f) => f.id && adjacentIds.has(f.id)).flatMap((f) => f.roles);
   return excluding(roles, alreadySearched, limit);
+}
+
+/**
+ * Seniority tiers.
+ *
+ *   1  C-level, VP, Head — the senior decision-makers
+ *   2  Director, Senior Director, Senior Manager — strong functional owners
+ *   3  Manager, Lead — functional operators
+ *
+ * The live Myntra run is what this exists for: 45 sources named a Risk
+ * Manager, a Senior Manager of Payments, a Director of Engineering and a
+ * Fraud Prevention Manager, and discovery proposed exactly ONE person, because
+ * the lexicon only ever asked for Head/VP/C-level titles. The sources had the
+ * people; the search never named the band they occupy.
+ *
+ * Widening the BAND is not the same as widening the FUNCTION. Every tier is
+ * built from the matched family's own workflow nouns, so a lower tier can only
+ * ever reach further down inside a function the workflow actually implicated.
+ * An unrelated function is no more reachable at Tier 3 than at Tier 1.
+ */
+export type SeniorityTier = 1 | 2 | 3;
+
+/** Titles that mark each band, most senior first. Order within a tier is not significant. */
+const TIER_MARKERS: Record<SeniorityTier, RegExp> = {
+  1: /\b(chief|c[teofi]o|cfo|ciso|coo|cto|cpo|vp|vice president|head of|general counsel|president|founder|partner)\b/i,
+  2: /\b(senior director|sr director|director|senior manager|sr manager|principal)\b/i,
+  3: /\b(manager|lead|supervisor|specialist)\b/i,
+};
+
+/**
+ * Which band a title sits in.
+ *
+ * Read from the TITLE TEXT rather than from which list produced it, so a role
+ * the discovery model reports in its own words ("Director Engineering",
+ * "Sr. Manager, Payments") is banded correctly even though no list contains
+ * that exact string. Tier 1 is tested first so "Head of Engineering" is not
+ * mistaken for a Tier 3 "Lead", and an unrecognized title falls to Tier 3 —
+ * the conservative end, never the authoritative one.
+ */
+export function roleTier(title: string): SeniorityTier {
+  if (TIER_MARKERS[1].test(title)) return 1;
+  if (TIER_MARKERS[2].test(title)) return 2;
+  return 3;
+}
+
+/** "Director of Payments", "Senior Manager Payments" — the Tier 2 ladder. */
+function tier2Titles(fn: string): string[] {
+  return [`Director of ${fn}`, `Senior Manager ${fn}`];
+}
+
+/** "Payments Manager", "Payments Lead" — the Tier 3 ladder. */
+function tier3Titles(fn: string): string[] {
+  return [`${fn} Manager`, `${fn} Lead`];
+}
+
+function tieredRoles(signals: string[], build: (fn: string) => string[]): string[] {
+  return matchingFamilies(signals).flatMap((f) => f.functions.flatMap(build));
+}
+
+/**
+ * LEVEL 4 — Director / Senior Manager owners inside the SAME matched families.
+ *
+ * Reached only after every Tier 1 title has been searched and produced nothing
+ * eligible, which is what makes this expand coverage rather than dilute it.
+ */
+export function tier2RolesForWorkflows(
+  signals: string[],
+  alreadySearched: string[] = [],
+  limit: number = MAX_FALLBACK_ROLES,
+): string[] {
+  return excluding(tieredRoles(signals, tier2Titles), alreadySearched, limit);
+}
+
+/**
+ * LEVEL 5 — Manager / Lead operators inside the same matched families.
+ *
+ * The last widening. Still gated on the same evidence, role-consistency and
+ * pre-verification checks as Tier 1: this changes who is looked for, never
+ * what they must prove.
+ */
+export function tier3RolesForWorkflows(
+  signals: string[],
+  alreadySearched: string[] = [],
+  limit: number = MAX_FALLBACK_ROLES,
+): string[] {
+  return excluding(tieredRoles(signals, tier3Titles), alreadySearched, limit);
 }
 
 /**

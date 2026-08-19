@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  buildActiveRunSummary,
   buildCommandCenterSummary,
   greetingName,
   timeOfDayGreeting,
@@ -215,7 +216,10 @@ describe('buildCommandCenterSummary — exploratory outreach', () => {
     ];
     const summary = buildCommandCenterSummary(runs, 10);
     expect(summary.counts.exploratory).toBe(2);
-    expect(summary.exploratory.every((i) => i.label === 'Exploratory outreach')).toBe(true);
+    // Both are borderline accounts that now pause for a person, so both read
+    // as the decision that is actually blocking them rather than as the
+    // outreach the system would otherwise have done. Still uniform.
+    expect(summary.exploratory.every((i) => i.label === 'Account decision needed')).toBe(true);
   });
 
   it('excludes runs with a different action', () => {
@@ -320,5 +324,73 @@ describe('timeOfDayGreeting', () => {
     expect(timeOfDayGreeting(new Date('2026-01-01T14:00:00'))).toBe('Good afternoon');
     expect(timeOfDayGreeting(new Date('2026-01-01T20:00:00'))).toBe('Good evening');
     expect(timeOfDayGreeting(new Date('2026-01-01T02:00:00'))).toBe('Good evening');
+  });
+});
+
+// The homepage used to embed the real LiveRunView, which meant `/` rendered
+// all fourteen stages, their retry affordances and a realtime subscription —
+// the run workspace on a triage surface. It now shows four short strings and
+// a link. These pin that shape: enough to say work is happening and where it
+// has reached, and nothing that belongs to /runs/[id].
+
+describe('buildActiveRunSummary — compact, never the pipeline', () => {
+  const stage = (name: string, order: number, status: string) =>
+    ({ stage_name: name, stage_order: order, status }) as never;
+
+  const activeRun = (over: Partial<RunRow> = {}): RunRow =>
+    run({
+      status: 'running',
+      prospect_name: 'Kannan Ganesan',
+      company_name: 'Myntra',
+      ...over,
+    });
+
+  it('names the stage actually running', () => {
+    const s = buildActiveRunSummary(activeRun(), [
+      stage('validate_input', 1, 'complete'),
+      stage('identify_prospect', 2, 'running'),
+      stage('resolve_candidate', 3, 'pending'),
+    ]);
+
+    expect(s.prospectName).toBe('Kannan Ganesan');
+    expect(s.companyName).toBe('Myntra');
+    expect(s.statusLabel).toBe('Research in progress');
+    expect(s.currentStageLabel).toBe('Identify prospect');
+  });
+
+  it('falls back to the next pending stage before anything has started', () => {
+    const s = buildActiveRunSummary(activeRun({ status: 'queued' }), [
+      stage('validate_input', 1, 'pending'),
+      stage('identify_prospect', 2, 'pending'),
+    ]);
+
+    expect(s.statusLabel).toBe('Queued');
+    expect(s.currentStageLabel).toBe('Validate input');
+  });
+
+  it('reads stage order, not array order', () => {
+    const s = buildActiveRunSummary(activeRun(), [
+      stage('resolve_candidate', 3, 'pending'),
+      stage('identify_prospect', 2, 'pending'),
+    ]);
+    expect(s.currentStageLabel).toBe('Identify prospect');
+  });
+
+  it('survives an empty stage list rather than throwing', () => {
+    const s = buildActiveRunSummary(activeRun(), []);
+    expect(s.currentStageLabel).toBeNull();
+    expect(s.runId).toBeTruthy();
+  });
+
+  it('carries only the four display fields — no stages, signals, draft or sources', () => {
+    const s = buildActiveRunSummary(activeRun(), [stage('identify_prospect', 2, 'running')]);
+
+    expect(Object.keys(s).sort()).toEqual([
+      'companyName',
+      'currentStageLabel',
+      'prospectName',
+      'runId',
+      'statusLabel',
+    ]);
   });
 });

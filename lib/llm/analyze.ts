@@ -17,6 +17,9 @@ import type { JsonSchema } from './types';
 import type { LinkedInProfile } from '@/lib/linkedin/profile';
 import type { NormalizedSource } from '@/lib/research/normalize';
 import { renderProfile } from '@/lib/linkedin/profile';
+import type { ApprovedProofContext } from '@/lib/proof/match';
+import { renderBrief, type EmailBrief } from '@/lib/generation/brief';
+import { EMAIL_WRITING_RULES } from '@/lib/generation/email-rules';
 
 export interface AnalysisProspect {
   name: string | null;
@@ -155,128 +158,7 @@ HOOK SELECTION:
 - If nothing supports credible personalisation, set selectedHookIndex to null and
   insufficientEvidence to true.
 
-MESSAGE:
-- 40-130 words. Aim for 80-110 when the evidence supports it, but do not pad a
-  message to reach a length: if one verified detail says everything worth saying,
-  45 words is a better message than 90. Do NOT assert pain points you have no
-  evidence for ("manual invoicing must be a bottleneck"). Ask, don't assume.
-
-VOICE — write like a person, not like a system reporting its research:
-- Human and grounded. Quietly confident. Reflective rather than declarative.
-  Plainspoken. Warm without being sentimental. Direct and specific.
-- Write PEER TO PEER, especially to founders, partners and senior leaders. Not
-  deferential, not impressed, not over-explaining. You are a smart person who did
-  a little homework and has a legitimate reason to make contact.
-- Short sentences. Natural contractions (I'd, you're, it's, we've). Simple words.
-  One idea per sentence. Vary the length. Two to four short paragraphs, and do
-  not use the same shape for every message.
-- A usable arc, not a template: what you noticed, why it caught your attention,
-  why you are relevant, a low-pressure close. Vary the opening, the transitions
-  and the close between messages.
-- ONE good specific detail beats five. Do not stack "I noticed your role, your
-  hiring, your expansion and your launch". That is research on display.
-  Personalisation should feel incidental, not performed.
-
-NEVER WRITE:
-- Manufactured contrast: "it's not X, it's Y", "it's not just X, it's Y",
-  "less about X, more about Y", "the real question isn't", "X isn't the answer".
-  No rhetorical questions as transitions. No sentences built for symmetry or
-  designed to sound quotable.
-- Essayistic filler: "here's the thing", "the truth is", "what struck me",
-  "it's worth noting", "that said", "ultimately", "which is why", "let me
-  explain", "at the end of the day", "in today's world", "in an era of".
-- Marketing vocabulary: meaningful, impactful, compelling, powerful, profound,
-  transformative, revolutionary, game-changing, unlock, reimagine, leverage,
-  synergy, north star, journey, at scale, increasingly, seamlessly, robust,
-  innovative, cutting-edge, exciting, dynamic, unique.
-- Praise: impressive, remarkable, visionary, forward-thinking, incredible,
-  outstanding. They know their own background; the verified fact is the reason
-  for writing, and a compliment adds nothing.
-- Fake familiarity: "I've been following your work", "I've long admired",
-  "I know how challenging this must be", "I can imagine how". You do not know
-  them and you do not know how they feel. Say what the evidence shows:
-  "the hiring pattern suggests the team is investing here", and only if it does.
-- Openers: "hope you're doing well", "I hope this email finds you well",
-  "I recently came across your profile", "I was impressed by your background".
-- Pushy closes: "hop on a quick call", "can I steal 15 minutes", "book time
-  here", "let's connect ASAP". Prefer "curious whether this is something you're
-  looking at", "happy to compare notes if it's relevant", or simply a question.
-  Do not force a call to action the evidence does not justify.
-- Em dashes. Use periods and commas. No exclamation marks.
-
-Good: "Saw the hiring push around data infrastructure at Acme."
-Bad:  "I was really impressed by the exciting work Acme is doing in data
-       infrastructure."
-Good: "I noticed the push into AI infrastructure. We work with teams dealing
-       with a similar shift."
-Bad:  "Your recent expansion into AI infrastructure is both impressive and
-       highly relevant to the broader changes we are seeing across the industry."
-
-Keep the sender description to one short sentence: "we help teams handle X".
-Not a pitch. No invented customers, results or credibility.
-
-APPROVED SOLUTION: if one is supplied below, it is the ONLY product you may
-describe. You may use its name, description and use cases to frame the
-message — you may NOT invent capabilities or outcomes beyond what is stated,
-and you may NOT apply it to anything listed as a non-use-case. If no approved
-solution is supplied, describe the sender's offering only in the general terms
-given above; do not name or imply a specific product.
-
-Do not fake humanity. No deliberate typos, no forced casualness, no artificial
-imperfections. Plain, careful writing already reads as human.
-
-Before returning the message, check it: could this be sent to a different person
-with the name swapped and still read the same? Would a skeptical executive call
-it PR? Does any sentence exist mainly to sound impressive? If so, simplify it.
-- The message must be SPECIFIC to the selected hook: it should be impossible to
-  send the same text to a different prospect without rewriting it.
-- WRITE THE OPENER AS AN OBSERVATION, NOT A HEADLINE OR A RESEARCH SUMMARY.
-  Reason privately in this order, then write only the last step:
-    1. what the evidence actually says
-    2. what it implies
-    3. why that matters to THIS person given their role
-    4. one natural sentence a salesperson would actually write
-  The research is your input; it is not the message. Do not reproduce your
-  summary of the company back to someone who works there.
-  The opening sentence must:
-    * make ONE observation, not stack several facts together
-    * run roughly 15-30 words
-    * connect to what this person actually does
-    * sound like a human wrote it to another human
-  It must NOT:
-    * be the source title, the quoted text, or the signal with words swapped
-    * open with "Given that…", "As the largest/leading…", "With over N customers…"
-      or any similar briefing construction
-    * describe the company's business back to them ("X operates as the largest Y
-      handling millions of Z") — they know what their company does
-    * pile on superlatives or corporate adjectives
-  A useful test: if the sentence could appear verbatim in a research report, it
-  is wrong. Rewrite it as something you would actually type to a person.
-- NEVER write a placeholder such as "[Your Name]", "[Sender Name]", "<Your Name>"
-  or "{{sender_name}}". Sign off with the sender name given to you above. If no
-  sender name was given, end after the call to action with no signature block.
-- If insufficientEvidence is true, set suggestedMessage to an empty string and
-  write no message at all. A run with no verified hook produces no draft.
-- List EVERY factual claim the message makes in messageClaims. For each, set:
-    type — what kind of assertion it is:
-      PROSPECT_FACT        a fact about the person (role, tenure, activity)
-      COMPANY_FACT         a fact about their company
-      EXTERNAL_EVENT       a dated event: funding, launch, acquisition, partnership
-      SENDER_OFFERING      what the SENDER sells ("we build AI agents for AP")
-      SENDER_CAPABILITY    what the sender's product can do ("it reconciles invoices")
-      SENDER_OUTCOME_CLAIM a results/performance claim about the sender's product
-                           ("cuts processing time 80%", "used by 200 finance teams")
-      GENERIC_LANGUAGE     a pleasantry, question or call to action
-    verdict — SUPPORTED, UNSUPPORTED or UNCERTAIN, judged against the evidence.
-  PROSPECT_FACT, COMPANY_FACT and EXTERNAL_EVENT require evidence: cite the
-  source URL in evidence_url. SENDER_OFFERING, SENDER_CAPABILITY and
-  GENERIC_LANGUAGE do NOT require third-party evidence — mark them SUPPORTED
-  with a null evidence_url.
-  AVOID SENDER_OUTCOME_CLAIM entirely: do not put percentages, customer counts,
-  time savings or ROI figures in the message unless they appear in the sender
-  brief you were given. Describe what the product does, not how well it performs.
-  Be strict about world-claims: unstated specifics are UNSUPPORTED even when
-  plausible.
+${EMAIL_WRITING_RULES}
 
 Scores are 0-100. relevance = to the sender's offering; specificity = how unique
 to THIS company/person; confidence = how firmly the source establishes it.`;
@@ -428,6 +310,24 @@ export interface AnalyzeInput {
   capabilityContext?: QualifiedCapabilityContext;
   /** The approved solution matched to this company's verified capabilities, if any. */
   approvedSolution?: ApprovedSolutionContext;
+  /**
+   * The ONE approved customer proof selected for this prospect, if any.
+   *
+   * Chosen deterministically in lib/proof/match.ts before this call — the
+   * model never sees the catalog and never picks. Absent means there is no
+   * approved proof for this workflow, which is a normal outcome and never a
+   * cue to supply one.
+   */
+  approvedProof?: ApprovedProofContext;
+  /**
+   * The already-settled inputs the email should be written FROM.
+   *
+   * Available only once hook gating has run, so it is supplied on the rewrite
+   * path today (see lib/generation/brief.ts for why, and for the architecture
+   * this is moving toward). When present it narrows the model's job to prose:
+   * which fact, which workflow and which proof are no longer its decisions.
+   */
+  emailBrief?: EmailBrief;
   /** Set only when regenerating a draft that failed the personalisation gate. */
   rewriteDirective?: string;
 }
@@ -500,7 +400,35 @@ Matched because this company was verified to have: ${input.approvedSolution.matc
 
 `
       : ''
-  }Web sources:
+  }${
+    input.approvedProof
+      ? `APPROVED ZAMP PROOF — the only customer result you may mention
+ID: ${input.approvedProof.id}
+Customer: ${input.approvedProof.customer}
+Workflow: ${input.approvedProof.workflow}
+Approved statement: ${input.approvedProof.approved_statement}
+
+Use this statement WORD FOR WORD, or leave it out entirely. Those are the only
+two options. Do not paraphrase it, shorten it, expand it, split it, merge it
+with another sentence, restate its numbers, change its customer, or draw a
+further result from it.
+
+`
+      : `NO APPROVED PROOF is available for this prospect. Write the message
+with no customer result at all. Specifically, do not:
+  - name a customer, or describe one as "a client", "a retailer", "a large bank"
+  - describe another company's outcome, however hedged
+  - cite a percentage, a time saving, a headcount figure or an ROI number
+  - create an anonymous or composite customer result
+  - write a case study, a mini case study, or a "teams typically see" claim
+  - invent evidence of any kind
+An email with no proof is correct and expected here. Make the message land on
+the verified fact, the operational implication and the specific work instead.
+
+`
+  }${input.emailBrief ? `${renderBrief(input.emailBrief)}
+
+` : ''}Web sources:
 ${renderSources(input.sources)}
 
 Produce the full analysis and the outreach message.${

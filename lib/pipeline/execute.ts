@@ -14,6 +14,14 @@ import {
   syncProspectFromRun,
 } from '@/lib/supabase/queries';
 import { newContext, StageAbort, type PipelineContext } from './context';
+import { briefForContext } from '@/lib/generation/brief';
+import { outreachContext } from '@/lib/generation/sender';
+import { writeEmailFromBrief } from '@/lib/generation/write-email';
+import {
+  accountDecisionState,
+  accountHeld,
+  outreachAllowedByDecision,
+} from '@/lib/qualification/account-decision';
 import type { NormalizedSource } from '@/lib/research/normalize';
 import { resolveIdentity } from '@/lib/research/identity';
 import { parseLinkedInUrl } from '@/lib/linkedin/url';
@@ -34,13 +42,18 @@ import {
   findContactCandidatesStage,
   isQualified,
   haltUnqualified,
+  awaitingAccountDecision,
+  pauseForAccountDecision,
+  haltAccountHeld,
   collectSignalsStage,
   evaluateSignalsStage,
   selectHookStage,
   generateMessageStage,
+  solutionContext,
+  proofContext,
+  senderFor,
   validateClaimsStage,
   readyForReviewStage,
-  regenerateMessage,
 } from './stages';
 
 /**
@@ -102,9 +115,23 @@ export async function executePipeline(runId: string): Promise<void> {
     // about this product at this company, before spending an analysis pass.
     await qualifyProspectStage(ctx);
     await qualifyCompanyStage(ctx);
+
+    // Human account decision gate. A BORDERLINE company pauses here and asks a
+    // person whether the account is worth pursuing — BEFORE contact discovery
+    // and before any outreach work, so nothing is spent on an account nobody
+    // has decided to pursue. Runs that need no decision fall straight through.
+    if (awaitingAccountDecision(ctx)) {
+      await pauseForAccountDecision(ctx);
+      return;
+    }
+    if (accountHeld(ctx.qualification)) {
+      await haltAccountHeld(ctx);
+      return;
+    }
+
     // Zero-cost no-op unless the company qualified and this person did not.
     await findContactCandidatesStage(ctx);
-    if (!isQualified(ctx)) {
+    if (!isQualified(ctx) || !outreachAllowedByDecision(ctx.qualification)) {
       await haltUnqualified(ctx);
       return;
     }
@@ -227,8 +254,20 @@ export async function resumeAfterIdentity(runId: string): Promise<void> {
     await researchCompanyStage(ctx);
     await qualifyProspectStage(ctx);
     await qualifyCompanyStage(ctx);
+
+    // Same human account decision gate as executePipeline — confirming an
+    // identity must not walk a borderline account past the pause.
+    if (awaitingAccountDecision(ctx)) {
+      await pauseForAccountDecision(ctx);
+      return;
+    }
+    if (accountHeld(ctx.qualification)) {
+      await haltAccountHeld(ctx);
+      return;
+    }
+
     await findContactCandidatesStage(ctx);
-    if (!isQualified(ctx)) {
+    if (!isQualified(ctx) || !outreachAllowedByDecision(ctx.qualification)) {
       await haltUnqualified(ctx);
       return;
     }
@@ -249,6 +288,79 @@ export async function resumeAfterIdentity(runId: string): Promise<void> {
     throw err;
   } finally {
     // Runs on every exit: completion, early return from a gate, and failure.
+    await syncProspect(runId);
+  }
+}
+
+/**
+ * Continue a run a person decided to pursue.
+ *
+ * Everything up to and including qualification is already done and persisted,
+ * so this rehydrates and resumes at the point the pause interrupted — no
+ * repeated provider spend and no re-run of a completed stage.
+ *
+ * It grants no exemptions. The run re-enters the SAME sequence
+ * `executePipeline` uses from this point, including `isQualified` — a person
+ * continuing an account does not make an unqualified target qualified, and
+ * every evidence, hook, solution and claim gate downstream is untouched.
+ *
+ * Which path it resumes into is decided by the matrix cell, not by the caller:
+ * a borderline account with a well-evidenced contact continues to outreach,
+ * while one with a borderline contact continues into contact discovery and
+ * stops there for a human to pick someone better.
+ */
+export async function continueAfterAccountDecision(runId: string): Promise<void> {
+  const run = await getRun(runId);
+  if (!run) throw new Error(`Run ${runId} not found`);
+
+  // Only ever acts on a decision already persisted by the API route. A run
+  // that is not CONTINUED is left exactly as it is.
+  if (accountDecisionState(run.qualification) !== 'CONTINUED') return;
+
+  const ctx = await rehydrate(runId);
+  await updateRun(runId, { status: 'running', error: null, completed_at: null });
+
+  try {
+    await findContactCandidatesStage(ctx);
+    if (!isQualified(ctx) || !outreachAllowedByDecision(ctx.qualification)) {
+      await haltUnqualified(ctx);
+      return;
+    }
+    await collectSignalsStage(ctx);
+    await evaluateSignalsStage(ctx);
+    await selectHookStage(ctx);
+    await generateMessageStage(ctx);
+    await validateClaimsStage(ctx);
+    await readyForReviewStage(ctx);
+  } catch (err) {
+    if (err instanceof StageAbort) return;
+    const message = err instanceof Error ? err.message : String(err);
+    await updateRun(runId, {
+      status: 'failed',
+      error: message,
+      completed_at: new Date().toISOString(),
+    });
+    throw err;
+  } finally {
+    await syncProspect(runId);
+  }
+}
+
+/**
+ * Record that a person held a borderline account. Terminal.
+ *
+ * No stage runs, no model is called and no draft is written — the whole point
+ * is that nothing further happens.
+ */
+export async function holdAfterAccountDecision(runId: string): Promise<void> {
+  const run = await getRun(runId);
+  if (!run) throw new Error(`Run ${runId} not found`);
+  if (accountDecisionState(run.qualification) !== 'HELD') return;
+
+  const ctx = await rehydrate(runId);
+  try {
+    await haltAccountHeld(ctx);
+  } finally {
     await syncProspect(runId);
   }
 }
@@ -277,17 +389,36 @@ export async function regenerateMessageOnly(runId: string): Promise<void> {
       throw new Error('No verified hook on this run — there is nothing to regenerate a message from.');
     }
 
-    const directive =
-      'Write a genuinely different version of this outreach message: new phrasing, new structure, ' +
-      'a different opening line from before. Stay grounded in the same verified observation and keep ' +
-      'every fact accurate — do not add or drop claims.';
-    const text = await regenerateMessage(ctx, directive);
-    if (!text) {
-      throw new Error('The model could not produce a new draft. The existing message is unchanged.');
+    // A rewrite, not a re-analysis: the run's settled brief (same hook, same
+    // workflow, same proof) plus an instruction to find new wording. No second
+    // research pass, and no route to a different business angle.
+    const brief = briefForContext(ctx, solutionContext(ctx), proofContext(ctx));
+    if (!brief) {
+      throw new Error('This run has no settled email brief, so there is nothing to regenerate from.');
     }
 
-    // Same save-and-check path a normal run uses: personalization/opener/voice
-    // checks, persist the draft, validate its claims, then finalize status.
+    const sender = senderFor(ctx);
+    const written = await writeEmailFromBrief({
+      brief,
+      senderName: sender.name,
+      senderCompany: sender.company,
+      outreachContext: outreachContext(sender),
+      sources: ctx.sources,
+      directive:
+        'Write a genuinely different version of this outreach message: new phrasing, new structure, ' +
+        'a different opening line from before. Stay grounded in the same verified observation and keep ' +
+        'every fact accurate — do not add or drop claims.',
+    });
+
+    // Written before the stage begins, so this failure never marks the stage
+    // (and therefore the run) failed. The existing draft is untouched.
+    if (!written) {
+      throw new Error('The model could not produce a new draft. The existing message is unchanged.');
+    }
+    ctx.pendingMessage = written;
+
+    // Same save-and-check path a normal run uses: personalization/opener/voice/
+    // quality checks, persist the draft, validate its claims, then finalize.
     await generateMessageStage(ctx);
     await validateClaimsStage(ctx);
     await readyForReviewStage(ctx);
