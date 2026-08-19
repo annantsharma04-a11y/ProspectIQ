@@ -7,6 +7,7 @@ import { DraftReviewCard } from './DraftReviewCard';
 import { IdentityCard } from './IdentityCard';
 import { ContactCandidates } from './ContactCandidates';
 import { DecisionSummary } from './DecisionSummary';
+import { AccountDecision } from './AccountDecision';
 import { OutreachRationale } from './OutreachRationale';
 import { StatusBadge, type StatusTone } from './StatusBadge';
 import type { RunSnapshot } from '@/lib/types';
@@ -380,6 +381,10 @@ export function ResultPanel({
     <section className="space-y-4">
       {/* Decision summary — the TL;DR, before anything else on the page */}
       <DecisionSummary run={run} />
+
+      {/* A borderline account waiting on a person sits directly under the
+          summary that explains why — renders nothing on any other run. */}
+      <AccountDecision run={run} onDecided={onChange} />
 
       {/* Prospect summary */}
       <div className="rounded-xl border border-hairline bg-surface p-5">

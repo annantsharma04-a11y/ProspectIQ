@@ -1,8 +1,9 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { getRun, listRuns, listStages, listSignals, listSources, getDraft, listContactCandidates } from '@/lib/supabase/queries';
+import { listRuns, listStages } from '@/lib/supabase/queries';
 import { getAuthenticatedUser } from '@/lib/supabase/server';
 import {
+  buildActiveRunSummary,
   buildCommandCenterSummary,
   greetingName,
   timeOfDayGreeting,
@@ -10,7 +11,7 @@ import {
   type TriageItem,
 } from '@/lib/dashboard/command-center';
 import type { RunRow } from '@/lib/types';
-import { ActiveRunPanel } from './ActiveRunPanel';
+import { ActiveWorkSummary } from './ActiveWorkSummary';
 
 /**
  * The homepage — a compact TRIAGE surface, not a second workspace.
@@ -41,9 +42,15 @@ export async function CommandCenter() {
   const greeting = timeOfDayGreeting();
   const allCaughtUp = summary.counts.needsAttention === 0 && summary.counts.ready === 0;
 
-  // The active run's full snapshot — same shape and same queries the run
-  // page itself uses — fetched only when there is one.
-  const activeSnapshot = summary.activeRunId ? await loadSnapshot(summary.activeRunId) : null;
+  // A compact description of the one run currently working. Only the stage
+  // list is fetched — the run row is already in `runs` — because this surface
+  // shows four short strings, not the run workspace.
+  const activeRun = summary.activeRunId
+    ? (runs.find((r) => r.id === summary.activeRunId) ?? null)
+    : null;
+  const activeSummary = activeRun
+    ? buildActiveRunSummary(activeRun, await listStages(activeRun.id).catch(() => []))
+    : null;
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -87,23 +94,9 @@ export async function CommandCenter() {
         actionText="Review"
       />
 
-      {activeSnapshot ? <ActiveRunPanel initial={activeSnapshot} /> : null}
+      {activeSummary ? <ActiveWorkSummary summary={activeSummary} /> : null}
     </div>
   );
-}
-
-/** Same shape, same queries app/runs/[id]/page.tsx uses — no second implementation. */
-async function loadSnapshot(runId: string) {
-  const run = await getRun(runId);
-  if (!run) return null;
-  const [stages, signals, sources, draft, contactCandidates] = await Promise.all([
-    listStages(runId),
-    listSignals(runId),
-    listSources(runId),
-    getDraft(runId),
-    listContactCandidates(runId).catch(() => []),
-  ]);
-  return { run, stages, signals, sources, draft, contactCandidates };
 }
 
 /** Renders nothing at all when there are no items — no heading, no empty placeholder. */

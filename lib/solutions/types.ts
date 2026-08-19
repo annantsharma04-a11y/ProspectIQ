@@ -31,6 +31,17 @@ export interface ZampSolution {
    * and never chosen by a model.
    */
   matches_capability_ids: string[];
+  /**
+   * Approved customer proofs (ApprovedProof.id) that may be used when pitching
+   * this solution — see lib/proof/catalog.ts.
+   *
+   * Optional so every existing catalog entry, and every deployment's current
+   * ZAMP_SOLUTION_CATALOG, stays valid without edits: a solution with no
+   * proof ids simply has no proof to offer, which is the correct and safe
+   * default. This is the single link between the two catalogs; there is no
+   * second mapping system.
+   */
+  proof_point_ids?: string[];
 }
 
 /** One capability that contributed to a solution match, carrying its verified evidence. */

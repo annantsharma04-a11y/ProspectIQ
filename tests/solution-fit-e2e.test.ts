@@ -334,12 +334,65 @@ const source = (over: Partial<SourceRow> = {}): SourceRow =>
 // headline, no fact-stacking), and checkVoice (no banned vocabulary, no em
 // dash, no exclamation marks, 40-130 words) — see lib/pipeline/stages.ts and
 // lib/generation/voice.ts. It also genuinely uses the approved solution.
-const GOOD_MESSAGE =
-  "Priya, saw Bluewave pulling its regional vendor invoicing into one workflow this quarter. " +
+// Updated for the Phase 3 quality bar: 3-4 paragraphs, 90-130 words, the
+// product described as WORK rather than as a category, and a collaborative
+// close. The previous fixture said "We build AI agents that handle..." — the
+// exact product-category failure checkEmailQuality() now catches, so it was
+// the fixture that was wrong, not the check. The opening sentence is
+// unchanged, because it is deliberately a paraphrase rather than a restatement
+// of the hook (checkOpener would reject a verbatim one).
+const GOOD_MESSAGE = [
+  "Priya, saw Bluewave pulling its regional vendor invoicing into one workflow this quarter.",
   "Consolidations like that usually mean someone has to standardize invoice matching and reconciliation " +
-  "across the merged entities before it settles into a routine process. We build AI agents that handle " +
-  "accounts payable automation, invoice processing and payables matching for finance teams doing exactly " +
-  "that. Worth comparing notes on how the transition is going?";
+    "across the merged entities before it settles into a routine process.",
+  "Zamp can process invoices, match and reconcile payables against purchase orders, and run accounts " +
+    "payable automation end to end across those entities.",
+  "I'd be keen to understand how the transition is being handled today and where we could be useful. " +
+    "Would be great to compare notes on a short call whenever it suits.",
+].join("\n\n");
+
+/**
+ * The pipeline now makes two differently-shaped model calls: the research pass
+ * (analyze_prospect) and the dedicated email writer (write_outreach_email).
+ * Route by the purpose the production code declares, so each call gets the
+ * shape it actually expects.
+ */
+const MESSAGE_CLAIMS = [
+  {
+    claim: 'Bluewave Freight is consolidating vendor invoicing across three regional entities this quarter.',
+    type: 'COMPANY_FACT',
+    verdict: 'SUPPORTED',
+    evidence_url: HOOK_SOURCE_URL,
+    explanation: 'Matches the retrieved source content verbatim.',
+  },
+  {
+    claim: 'Zamp can process invoices, match and reconcile payables and run accounts payable automation.',
+    type: 'SENDER_CAPABILITY',
+    verdict: 'SUPPORTED',
+    evidence_url: null,
+    explanation: 'A description of the sender’s own product; no third-party evidence required.',
+  },
+];
+
+function routeByPurpose(analysis: unknown, message: string, claims: unknown[]) {
+  return (args: { purpose: string }) => {
+    if (args.purpose === 'write_outreach_email') {
+      return Promise.resolve({
+        data: { subject: 'Invoice processing', message, messageClaims: claims },
+        meta: { model: 'test', used_fallback_model: false, purpose: 'write_outreach_email', duration_ms: 1, attempts: 1, total_tokens: null },
+      });
+    }
+    // The editorial pass returns the draft unchanged, which chooseDraft()
+    // treats as "no edit" and keeps the written version.
+    if (args.purpose === 'edit_outreach_email') {
+      return Promise.resolve({
+        data: { message, changed: false, messageClaims: claims },
+        meta: { model: 'test', used_fallback_model: false, purpose: 'edit_outreach_email', duration_ms: 1, attempts: 1, total_tokens: null },
+      });
+    }
+    return Promise.resolve(analysis);
+  };
+}
 
 function goodModelResponse(overrides: Record<string, unknown> = {}) {
   return {
@@ -354,22 +407,7 @@ function goodModelResponse(overrides: Record<string, unknown> = {}) {
       outreachAngle: 'The active vendor-invoicing consolidation across regional entities.',
       suggestedSubject: 'Bluewave AP consolidation',
       suggestedMessage: GOOD_MESSAGE,
-      messageClaims: [
-        {
-          claim: 'Bluewave Freight is consolidating vendor invoicing across three regional entities this quarter.',
-          type: 'COMPANY_FACT',
-          verdict: 'SUPPORTED',
-          evidence_url: HOOK_SOURCE_URL,
-          explanation: 'Matches the retrieved source content verbatim.',
-        },
-        {
-          claim: 'We build AI agents that handle accounts payable automation, invoice processing and payables matching.',
-          type: 'SENDER_CAPABILITY',
-          verdict: 'SUPPORTED',
-          evidence_url: null,
-          explanation: 'A description of the sender’s own product; no third-party evidence required.',
-        },
-      ],
+      messageClaims: MESSAGE_CLAIMS,
       confidence: 80,
       informationRequests: [],
       ...overrides,
@@ -402,7 +440,9 @@ beforeEach(() => {
   mockCreateDraft.mockImplementation((row: Partial<DraftRow>) =>
     Promise.resolve(draft({ id: 'draft-2', ...row } as Partial<DraftRow>)),
   );
-  mockCallStructured.mockResolvedValue(goodModelResponse());
+  mockCallStructured.mockImplementation(
+    routeByPurpose(goodModelResponse(), GOOD_MESSAGE, MESSAGE_CLAIMS),
+  );
 });
 
 afterEach(() => {
@@ -433,18 +473,25 @@ describe('Solution Fit — one real end-to-end case', () => {
     expect(match!.why_it_fits).toContain('Bluewave Freight is consolidating vendor invoicing');
   });
 
-  it('step 4-5: the model prompt actually receives the approved solution, with its boundaries intact', async () => {
+  it('step 4-5: the writer prompt receives the approved capability and workflow, with its boundaries intact', async () => {
     await regenerateMessageOnly(RUN_ID);
 
-    expect(mockCallStructured).toHaveBeenCalled();
-    const call = mockCallStructured.mock.calls[0][0];
-    expect(call.input).toContain('APPROVED SOLUTION');
-    expect(call.input).toContain('Accounts payable automation');
-    expect(call.input).toContain('AI digital-employee agents that process invoices');
-    // The matched capability's own verified signal is what justified the match.
-    expect(call.input).toContain('Bluewave Freight is consolidating vendor invoicing');
-    // The model is told what it may NOT claim beyond this.
-    expect(call.input).toMatch(/only product you may describe/i);
+    // The email is now written by the dedicated writer from a settled brief,
+    // so the approved solution reaches the model as the brief's workflow and
+    // capability rather than as a block the model must interpret.
+    const write = mockCallStructured.mock.calls
+      .map((c) => c[0])
+      .find((c) => c.purpose === 'write_outreach_email');
+    expect(write).toBeDefined();
+
+    expect(write!.input).toContain('EMAIL BRIEF');
+    expect(write!.input).toContain('Invoice processing');
+    expect(write!.input).toContain('AI digital-employee agents that process invoices');
+    // The verified fact the solution match rests on.
+    expect(write!.input).toContain('Bluewave Freight is consolidating vendor invoicing');
+    // The model is told what it may NOT do with it.
+    expect(write!.input).toMatch(/never restate it as a product category/i);
+    expect(write!.system).toMatch(/name a workflow, capability or product behaviour the brief does not state/i);
   });
 
   it('step 6: generate_message persists the approved solution for the UI to read', async () => {
@@ -481,9 +528,12 @@ describe('Solution Fit — one real end-to-end case', () => {
     expect(Array.isArray(patch.claims)).toBe(true);
     expect(patch.claims.length).toBeGreaterThan(0);
 
-    // The message cleared voice/personalization/opener on the first attempt —
-    // exactly one model call, no forced regeneration was needed.
-    expect(mockCallStructured).toHaveBeenCalledTimes(1);
+    // The draft cleared every check on the first attempt, so exactly one
+    // WRITE call was made and no regeneration was forced.
+    const writeCalls = mockCallStructured.mock.calls.filter(
+      (c) => (c[0] as { purpose: string }).purpose === 'write_outreach_email',
+    );
+    expect(writeCalls).toHaveLength(1);
 
     const finalStatuses = mockUpdateRun.mock.calls.map((c) => c[1]?.status).filter(Boolean);
     expect(finalStatuses[0]).toBe('running');

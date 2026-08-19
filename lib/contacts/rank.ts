@@ -16,6 +16,7 @@
 import { isSameSource } from '@/lib/url-identity';
 import { quoteAppearsIn } from '@/lib/signals/verify';
 import type { NormalizedSource } from '@/lib/research/normalize';
+import { roleTier } from './roles';
 
 export interface ProposedCandidate {
   name: string;
@@ -45,6 +46,19 @@ export const MAX_CANDIDATES = 5;
 export const MIN_CANDIDATES = 0;
 
 const W_ROLE_MATCH = 35;
+/**
+ * Seniority, applied only AFTER functional relevance has already been proven.
+ *
+ * roleMatches() is a hard gate above this: a candidate whose role does not own
+ * the qualified workflow is never scored at all. So this weight can only ever
+ * order people who are ALL relevant — it cannot lift an unrelated senior
+ * person above a relevant junior one, because the unrelated person is not in
+ * the list to be lifted.
+ *
+ * Sized below W_ROLE_MATCH deliberately: authority breaks ties among relevant
+ * owners, it does not substitute for owning the workflow.
+ */
+const W_SENIORITY = 20;
 const W_HAS_LINKEDIN = 25;
 const W_SOURCE_CREDIBILITY = 25;
 const W_QUOTE_LENGTH = 10; // a longer verified quote is harder to have faked context for
@@ -70,13 +84,17 @@ export function roleMatches(proposedRole: string, targetRoles: string[]): boolea
   });
 }
 
+/** Tier 1 keeps the full seniority weight, Tier 2 two-thirds, Tier 3 one-third. */
+const TIER_WEIGHT: Record<number, number> = { 1: 1, 2: 2 / 3, 3: 1 / 3 };
+
 function scoreOf(c: ProposedCandidate, source: NormalizedSource): number {
   const roleScore = W_ROLE_MATCH; // only scored candidates already passed the role gate
+  const seniorityScore = W_SENIORITY * (TIER_WEIGHT[roleTier(c.role)] ?? TIER_WEIGHT[3]);
   const linkedinScore = c.linkedin_url ? W_HAS_LINKEDIN : 0;
   const credibilityScore = (source.credibility ?? 0.45) * W_SOURCE_CREDIBILITY;
   const quoteScore = Math.min(c.quote.length / 20, W_QUOTE_LENGTH);
   const recencyScore = source.published_date ? W_RECENCY : 0;
-  return roleScore + linkedinScore + credibilityScore + quoteScore + recencyScore;
+  return roleScore + seniorityScore + linkedinScore + credibilityScore + quoteScore + recencyScore;
 }
 
 /**
@@ -123,7 +141,14 @@ export function rankCandidates(
         linkedin_url: c.linkedin_url,
         evidence: { source_url: c.sourceUrl, quote: c.quote },
         reason: `Public role matches the qualified workflow (${workflowSignal}).`,
-        confidence: Math.round(Math.min(100, (score / (W_ROLE_MATCH + W_HAS_LINKEDIN + W_SOURCE_CREDIBILITY + W_QUOTE_LENGTH + W_RECENCY)) * 100)),
+        confidence: Math.round(
+          Math.min(
+            100,
+            (score /
+              (W_ROLE_MATCH + W_SENIORITY + W_HAS_LINKEDIN + W_SOURCE_CREDIBILITY + W_QUOTE_LENGTH + W_RECENCY)) *
+              100,
+          ),
+        ),
         rankScore: Math.round(score * 100) / 100,
       };
     })

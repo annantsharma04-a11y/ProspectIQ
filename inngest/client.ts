@@ -37,3 +37,10 @@ export interface OutreachIdentityResumeRequestedEvent {
   name: typeof OUTREACH_IDENTITY_RESUME_REQUESTED;
   data: { runId: string };
 }
+
+export const OUTREACH_ACCOUNT_DECISION_MADE = 'outreach/account.decision.made';
+
+export interface OutreachAccountDecisionMadeEvent {
+  name: typeof OUTREACH_ACCOUNT_DECISION_MADE;
+  data: { runId: string };
+}

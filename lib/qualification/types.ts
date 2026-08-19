@@ -129,6 +129,18 @@ export interface TargetQualification {
   suggestion: string | null;
   /** Which cell of the qualification decision matrix produced this outcome. */
   action: QualificationAction;
+  /**
+   * A person's answer to "is this borderline account worth pursuing?".
+   *
+   * Stored alongside the qualification result, never part of it: nothing in
+   * this object is derived from it, `combineQualification()` never reads it,
+   * and attaching one changes no score, basis, classification or action. It
+   * exists here because runs.qualification is already jsonb, so the decision
+   * persists with the run and survives reload without a migration.
+   *
+   * See lib/qualification/account-decision.ts.
+   */
+  human_account_decision?: import('./account-decision').AccountDecisionRecord | null;
 }
 
 /** Numeric floors. Deliberately explicit so a reviewer can see the bar. */

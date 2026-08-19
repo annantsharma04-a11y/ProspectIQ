@@ -23,8 +23,12 @@
 // the Run page, the Stage Detail page and History, exactly where it already
 // lives.
 
-import type { RunRow, RunStatus } from '@/lib/types';
+import { STAGE_LABELS, type RunRow, type RunStageRow, type RunStatus } from '@/lib/types';
 import { buildDecisionSummary, type DecisionAction } from '@/lib/ui/decision-summary';
+import {
+  accountDecisionState,
+  type AccountDecisionState,
+} from '@/lib/qualification/account-decision';
 
 /** How many rows each section previews before "View all". Configurable from one place. */
 export const PREVIEW_LIMIT = 3;
@@ -80,9 +84,29 @@ function toItem(run: RunRow, label: string): TriageItem {
   return { runId: run.id, prospectName: displayName(run), companyName: run.company_name, label };
 }
 
+/**
+ * A borderline account's human-decision label, or null when none applies.
+ *
+ * Takes priority over the matrix action wherever it exists: "Exploratory
+ * outreach" describes what the system would do, while this describes what is
+ * actually blocking — and a triage surface exists to answer the second.
+ */
+const DECISION_LABEL: Record<AccountDecisionState, string | null> = {
+  NONE: null,
+  REQUIRED: 'Account decision needed',
+  CONTINUED: 'Account continued',
+  HELD: 'Account held',
+};
+
+function accountDecisionLabel(run: RunRow): string | null {
+  return DECISION_LABEL[accountDecisionState(run.qualification)];
+}
+
 function needsAttentionLabel(run: RunRow): string {
   const action = buildDecisionSummary(run)?.action;
-  return action ?? STATUS_LABEL[run.status] ?? run.status.replace(/_/g, ' ');
+  return (
+    accountDecisionLabel(run) ?? action ?? STATUS_LABEL[run.status] ?? run.status.replace(/_/g, ' ')
+  );
 }
 
 const CONTACT_WORK_ACTIONS: DecisionAction[] = ['VERIFY BETTER CONTACT', 'FIND BETTER CONTACT'];
@@ -109,7 +133,9 @@ export function buildCommandCenterSummary(runs: RunRow[], limit = PREVIEW_LIMIT)
     needsAttention: attentionRuns.slice(0, limit).map((r) => toItem(r, needsAttentionLabel(r))),
     ready: readyRuns.slice(0, limit).map((r) => toItem(r, 'Ready for review')),
     contactsNeedingWork: contactRuns.slice(0, limit).map((r) => toItem(r, decisions.get(r.id)!.action)),
-    exploratory: exploratoryRuns.slice(0, limit).map((r) => toItem(r, 'Exploratory outreach')),
+    exploratory: exploratoryRuns
+      .slice(0, limit)
+      .map((r) => toItem(r, accountDecisionLabel(r) ?? 'Exploratory outreach')),
     counts: {
       total: runs.length,
       needsAttention: attentionRuns.length,
@@ -118,6 +144,52 @@ export function buildCommandCenterSummary(runs: RunRow[], limit = PREVIEW_LIMIT)
       exploratory: exploratoryRuns.length,
     },
     activeRunId: activeRun?.id ?? null,
+  };
+}
+
+/**
+ * A COMPACT description of the one run currently working — deliberately not
+ * the pipeline.
+ *
+ * The homepage used to embed the real LiveRunView here, which meant `/`
+ * rendered all fourteen stages, their statuses, their retry affordances and a
+ * realtime subscription: the run workspace, on the triage surface. This
+ * returns four short strings instead. Everything it omits is one click away on
+ * /runs/[id], which is the page that owns that answer.
+ *
+ * `currentStageLabel` is the stage actually RUNNING where there is one; before
+ * the first stage starts it names the next pending stage, so a just-queued run
+ * still says something truthful rather than nothing.
+ */
+export interface ActiveRunSummary {
+  runId: string;
+  prospectName: string;
+  companyName: string | null;
+  /** One short line: what is happening to this run right now. */
+  statusLabel: string;
+  /** Human-readable name of the stage in progress, or null if none has begun. */
+  currentStageLabel: string | null;
+}
+
+const ACTIVE_STATUS_LABEL: Record<string, string> = {
+  queued: 'Queued',
+  running: 'Research in progress',
+};
+
+export function buildActiveRunSummary(
+  run: RunRow,
+  stages: Pick<RunStageRow, 'stage_name' | 'status' | 'stage_order'>[],
+): ActiveRunSummary {
+  const ordered = [...stages].sort((a, b) => a.stage_order - b.stage_order);
+  const current =
+    ordered.find((s) => s.status === 'running') ?? ordered.find((s) => s.status === 'pending') ?? null;
+
+  return {
+    runId: run.id,
+    prospectName: displayName(run),
+    companyName: run.company_name,
+    statusLabel: ACTIVE_STATUS_LABEL[run.status] ?? run.status.replace(/_/g, ' '),
+    currentStageLabel: current ? STAGE_LABELS[current.stage_name] : null,
   };
 }
 

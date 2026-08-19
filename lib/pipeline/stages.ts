@@ -29,6 +29,10 @@ import {
   listSignals,
 } from '@/lib/supabase/queries';
 import { checkVoice } from '@/lib/generation/voice';
+import { briefForContext } from '@/lib/generation/brief';
+import { writeEmailFromBrief, type WrittenEmail } from '@/lib/generation/write-email';
+import { editEmail, chooseDraft } from '@/lib/generation/edit-email';
+import { checkEmailQuality, repairDirective } from '@/lib/generation/email-quality';
 import { parseLinkedInUrl } from '@/lib/linkedin/url';
 import { retrieveLinkedInProfile } from '@/lib/linkedin/fetch';
 import { renderProfile } from '@/lib/linkedin/profile';
@@ -48,8 +52,22 @@ import { analyzeProspect } from '@/lib/llm/analyze';
 import { LLMError } from '@/lib/llm/types';
 import { getSenderConfig, outreachContext, INSUFFICIENT_EVIDENCE_NOTICE } from '@/lib/generation/sender';
 import { validateClaims } from '@/lib/validation/factcheck';
+import {
+  AUTO_REVISED_MARKER,
+  MAX_REPAIR_ATTEMPTS,
+  blockingClaims,
+  repairMessage,
+  shouldAttemptRepair,
+  verifyRepairSafety,
+} from '@/lib/generation/repair';
 import { configuredProviders } from '@/lib/search';
 import { qualifyTarget } from '@/lib/qualification/qualify';
+import {
+  accountDecisionPending,
+  accountDecisionRecord,
+  contactDiscoveryUnlockedByDecision,
+  continuationPath,
+} from '@/lib/qualification/account-decision';
 import { discoverCandidates } from '@/lib/identity/discover';
 import { verifySelectedCandidate } from '@/lib/identity/verify';
 import { decideIdentity, selectCandidate, accountFields } from '@/lib/identity/types';
@@ -62,10 +80,18 @@ import {
   type TargetQualification,
 } from '@/lib/qualification/types';
 import { discoverContacts } from '@/lib/contacts/discover';
-import { rolesForWorkflows, adjacentRolesForWorkflows, deeperRolesForWorkflows } from '@/lib/contacts/roles';
+import {
+  rolesForWorkflows,
+  adjacentRolesForWorkflows,
+  deeperRolesForWorkflows,
+  tier2RolesForWorkflows,
+  tier3RolesForWorkflows,
+} from '@/lib/contacts/roles';
 import { rankCandidates } from '@/lib/contacts/rank';
 import { preVerifyCandidate } from '@/lib/contacts/preverify';
 import { createContactCandidates } from '@/lib/supabase/queries';
+import { matchApprovedProof, proofForPrompt } from '@/lib/proof/match';
+import { NO_PROOF_MATCH_MESSAGE } from '@/lib/proof/types';
 import { matchApprovedSolution, solutionForPrompt } from '@/lib/solutions/match';
 import { NO_SOLUTION_MATCH_MESSAGE } from '@/lib/solutions/types';
 import { StageAbort, type PipelineContext } from './context';
@@ -989,7 +1015,12 @@ const CONTACT_DISCOVERY_ACTIONS = new Set<TargetQualification['action']>([
  * reimplementation of it.
  */
 export function contactDiscoveryApplicable(q: TargetQualification | null): boolean {
-  return Boolean(q && CONTACT_DISCOVERY_ACTIONS.has(q.action));
+  if (!q) return false;
+  // The whitelist above is unchanged. The only addition is the cell a person
+  // explicitly opened by continuing a borderline account to look for a better
+  // contact — which is false for every run without that recorded decision,
+  // including every run that predates this feature.
+  return CONTACT_DISCOVERY_ACTIONS.has(q.action) || contactDiscoveryUnlockedByDecision(q);
 }
 
 /** Why this stage is a no-op, keyed directly off `action` — no proceed/classification inference. */
@@ -998,6 +1029,8 @@ const SKIP_REASON: Record<TargetQualification['action'], string> = {
   VERIFY_BETTER_CONTACT: 'NO_SUGGESTION', // unreachable — this action IS applicable
   FIND_BETTER_CONTACT: 'NO_SUGGESTION', // unreachable — this action IS applicable
   EXPLORATORY_OUTREACH: 'COMPANY_BORDERLINE_EXPLORATORY',
+  // Reachable only when a person has NOT continued this account; once they
+  // have, the cell is applicable and this stage runs for real.
   EXPLORATORY_OUTREACH_IF_SIGNAL: 'COMPANY_BORDERLINE_EXPLORATORY',
   FIND_BETTER_CONTACT_OR_HOLD: 'COMPANY_BORDERLINE',
   DO_NOT_CONTACT: 'NOT_QUALIFIED',
@@ -1062,9 +1095,11 @@ export async function findContactCandidatesStage(ctx: PipelineContext): Promise<
     // Discovery runs in deterministic LEVELS, widening only when the previous
     // level produced nothing a human could actually act on.
     //
-    //   1  the workflow's primary functional owners
+    //   1  the workflow's primary functional owners (Tier 1)
     //   2  owners of an ADJACENT function for the same workflow
     //   3  deeper into the same families, past the primary search's cap
+    //   4  Director / Senior Manager owners of the same functions (Tier 2)
+    //   5  Manager / Lead operators of the same functions (Tier 3)
     //
     // The rule is: STRICT about verification, more flexible about discovery.
     // Every level's candidates go through the identical ranking, evidence and
@@ -1080,13 +1115,17 @@ export async function findContactCandidatesStage(ctx: PipelineContext): Promise<
     let preVerified: { candidate: (typeof rankedForLevel)[number]; result: ReturnType<typeof preVerifyCandidate> }[] = [];
     let rankedForLevel: ReturnType<typeof rankCandidates> = [];
 
-    for (const level of [1, 2, 3] as const) {
+    for (const level of [1, 2, 3, 4, 5] as const) {
       const levelRoles =
         level === 1
           ? rolesForWorkflows(workflowSignals)
           : level === 2
             ? adjacentRolesForWorkflows(workflowSignals, searchedRoles)
-            : deeperRolesForWorkflows(workflowSignals, searchedRoles);
+            : level === 3
+              ? deeperRolesForWorkflows(workflowSignals, searchedRoles)
+              : level === 4
+                ? tier2RolesForWorkflows(workflowSignals, searchedRoles)
+                : tier3RolesForWorkflows(workflowSignals, searchedRoles);
 
       if (levelRoles.length === 0) continue;
 
@@ -1255,6 +1294,134 @@ export function solutionContext(ctx: PipelineContext) {
   return matchApprovedSolution(ctx.qualification);
 }
 
+/**
+ * The approved customer proof for this run's matched solution, if any.
+ *
+ * Phase 1: computed and RECORDED ONLY. It is not passed to the model, not
+ * added to the prompt, and not used to write or validate anything — the
+ * generated email is byte-for-byte what it was before this existed. Surfacing
+ * it in the stage output first means the matching can be reviewed against
+ * real runs before any of it reaches a message.
+ */
+export function proofContext(ctx: PipelineContext) {
+  return matchApprovedProof(matchApprovedSolution(ctx.qualification));
+}
+
+// ─── human account decision ──────────────────────────────────────────────────
+//
+// A BORDERLINE company is not an evidence problem — more research does not
+// resolve it. It is a commercial judgment, so the run pauses and asks. See
+// lib/qualification/account-decision.ts for the state model and for why
+// continuing cannot relax anything downstream.
+
+/** True when this run is waiting on a person before anything else may run. */
+export function awaitingAccountDecision(ctx: PipelineContext): boolean {
+  return accountDecisionPending(ctx.qualification);
+}
+
+/**
+ * Pause a run for a human account decision.
+ *
+ * Deliberately unlike every halt around it: nothing failed and nothing was
+ * judged unfit. The remaining stages are left PENDING rather than skipped,
+ * because this run genuinely resumes into them — marking them skipped would
+ * claim the pipeline had finished with them when a person is about to send it
+ * back through. No draft is written and no model call is made while waiting.
+ */
+export async function pauseForAccountDecision(ctx: PipelineContext): Promise<void> {
+  const q = ctx.qualification;
+  const path = continuationPath(q);
+
+  await deleteDrafts(ctx.runId);
+  await updateRun(ctx.runId, {
+    status: 'needs_manual_review',
+    overall_confidence: q?.overall_fit ?? 0,
+    selected_hook: null,
+    generated_message: null,
+    insufficient_evidence: true,
+    completed_at: new Date().toISOString(),
+    error: null,
+  });
+
+  const stageId = await startStage(ctx.runId, 'ready_for_review');
+  await finishStage(stageId, {
+    status: 'complete',
+    summary:
+      path === 'FIND_CONTACT'
+        ? 'Waiting — a person needs to decide whether to look for a better contact at this borderline account.'
+        : 'Waiting — a person needs to decide whether this borderline account is worth pursuing.',
+    duration_ms: 0,
+    output: {
+      needs_manual_review: true,
+      stopped_at: 'account_decision',
+      awaiting_account_decision: true,
+      continuation_path: path,
+      // Stated explicitly so the record cannot be read as a qualification change.
+      account_status: 'BORDERLINE',
+      qualification_unchanged: true,
+      nothing_sent: true,
+    },
+  });
+}
+
+/**
+ * Record a held account. Terminal — the person decided not to pursue it.
+ *
+ * The account keeps its BORDERLINE qualification: a person declining to spend
+ * effort on an account is not a finding about the evidence.
+ */
+export async function haltAccountHeld(ctx: PipelineContext): Promise<void> {
+  const q = ctx.qualification;
+  const stageId = await startStage(ctx.runId, 'ready_for_review');
+  const startedAt = Date.now();
+
+  await deleteDrafts(ctx.runId);
+  await updateRun(ctx.runId, {
+    status: 'needs_manual_review',
+    overall_confidence: q?.overall_fit ?? 0,
+    selected_hook: null,
+    generated_message: null,
+    insufficient_evidence: true,
+    completed_at: new Date().toISOString(),
+    error: null,
+  });
+
+  const { listStages, finishStage: finish } = await import('@/lib/supabase/queries');
+  const stages = await listStages(ctx.runId);
+  const skippable: StageName[] = [
+    'find_contact_candidates',
+    'collect_signals',
+    'evaluate_signals',
+    'select_hook',
+    'generate_message',
+    'validate_claims',
+  ];
+  for (const row of stages) {
+    if (skippable.includes(row.stage_name) && row.status === 'pending') {
+      await finish(row.id, {
+        status: 'skipped',
+        summary: 'Skipped — a person held this account, so no outreach was generated.',
+        output: { skipped: true, reason: 'ACCOUNT_HELD' },
+      });
+    }
+  }
+
+  await finishStage(stageId, {
+    status: 'complete',
+    summary: 'Account held by a person — no outreach generated.',
+    duration_ms: Date.now() - startedAt,
+    output: {
+      needs_manual_review: true,
+      stopped_at: 'account_decision',
+      account_held: true,
+      account_status: 'BORDERLINE',
+      qualification_unchanged: true,
+      nothing_sent: true,
+      decision: accountDecisionRecord(q),
+    },
+  });
+}
+
 /** True when qualification says we may proceed to hooks and outreach. */
 export function isQualified(ctx: PipelineContext): boolean {
   return ctx.qualification?.proceed === true;
@@ -1399,6 +1566,9 @@ export async function evaluateSignalsStage(ctx: PipelineContext): Promise<void> 
         senderCompany: sender.company,
         capabilityContext: capabilityContext(ctx),
         approvedSolution: solutionContext(ctx) ? solutionForPrompt(solutionContext(ctx)!) : undefined,
+        // Selected deterministically in lib/proof/match.ts. The model receives
+        // this ONE statement and no catalog, so it has nothing to choose from.
+        approvedProof: proofContext(ctx) ? proofForPrompt(proofContext(ctx)!) : undefined,
       });
     } catch (err) {
       if (err instanceof LLMError) {
@@ -1515,6 +1685,12 @@ export async function evaluateSignalsStage(ctx: PipelineContext): Promise<void> 
           outreachContext: outreachContext(sender),
           senderName: sender.name,
           senderCompany: sender.company,
+          // Previously omitted here, which left this path writing with no
+          // capability, solution or proof context at all — the new structure
+          // cannot be followed without them.
+          capabilityContext: capabilityContext(ctx),
+          approvedSolution: solutionContext(ctx) ? solutionForPrompt(solutionContext(ctx)!) : undefined,
+          approvedProof: proofContext(ctx) ? proofForPrompt(proofContext(ctx)!) : undefined,
         });
         analysis = second;
         ctx.analysis = second.data;
@@ -2083,15 +2259,8 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
     // recorded here so the UI can show the same recommendation the model was
     // (or was not) given, never a claim invented after the fact.
     const solutionMatch = solutionContext(ctx);
-    const messageText = applySenderIdentity(analysis.suggestedMessage ?? '', sender.name);
-    if (!messageText) {
-      return {
-        status: 'failed' as const,
-        summary: 'A hook was selected but the analysis returned no message text.',
-        output: { hook: ctx.hook.signal },
-        value: undefined,
-      };
-    }
+    // Phase 1: matched and recorded, deliberately NOT passed to the model.
+    const proofMatch = matchApprovedProof(solutionMatch);
 
     // Personalisation gate: one regeneration, then manual review.
     const personContext = {
@@ -2099,8 +2268,75 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
       company: ctx.identity?.company ?? ctx.run.input_company,
       role: ctx.identity?.role ?? ctx.run.input_title,
     };
+
+    // Every business decision is settled by this point: the hook has been
+    // quote-verified, scored and gated; the solution and proof were matched
+    // deterministically. The brief carries exactly those decisions.
+    const brief = briefForContext(ctx, solutionMatch, proofMatch);
+
+    // THE EMAIL IS WRITTEN HERE, from the brief — not taken from the analysis
+    // pass, which drafts a message in the same breath as it PROPOSES hooks and
+    // therefore writes against a hook the gate may go on to reject. When the
+    // writer is unavailable the analysis draft is still used, so a model
+    // failure degrades rather than dead-ends the run.
+    // A user-requested rewrite is written by regenerateMessageOnly() before
+    // this stage starts, so a writer failure there can be reported without
+    // failing the stage. Otherwise this is a first generation.
+    const preWritten = ctx.pendingMessage as WrittenEmail | null;
+    ctx.pendingMessage = null;
+
+    let written: WrittenEmail | null =
+      preWritten ??
+      (brief
+        ? await writeEmailFromBrief({
+            brief,
+            senderName: sender.name,
+            senderCompany: sender.company,
+            outreachContext: outreachContext(sender),
+            sources: ctx.sources,
+            directive: null,
+          })
+        : null);
+
+    // One editorial pass over the writer's draft. It may only improve prose;
+    // its output is compared against the writer's on the same deterministic
+    // checks and discarded unless it holds up. No loop — see edit-email.ts.
+    let editNote: string | null = null;
+    let wasEdited = false;
+    if (written && brief) {
+      const edited = await editEmail({ brief, message: written.message, claims: written.claims });
+      const choice = chooseDraft(brief, written, edited, ctx.hook.supporting_quote ?? null);
+      editNote = choice.reason;
+      wasEdited = choice.edited;
+      written = { ...written, message: choice.message, claims: choice.claims };
+    }
+
+    if (written) {
+      // Claims must describe the text that will actually be validated.
+      analysis.suggestedMessage = written.message;
+      analysis.messageClaims = written.claims;
+      if (written.subject) analysis.suggestedSubject = written.subject;
+    }
+
+    const messageText = applySenderIdentity(
+      written?.message ?? analysis.suggestedMessage ?? '',
+      sender.name,
+    );
+    if (!messageText) {
+      return {
+        status: 'failed' as const,
+        summary: 'A hook was selected but no message text could be produced.',
+        output: { hook: ctx.hook.signal },
+        value: undefined,
+      };
+    }
+
     const gate = checkPersonalization(messageText, ctx.hook, personContext);
     const opener = checkOpener(messageText, ctx.hook);
+    // The specific defects the earlier checks do not cover — stacked openings,
+    // interpreted facts, asserted pain, product-category language, missing
+    // workflow, invented proof, pushy CTAs.
+    const quality = checkEmailQuality(messageText, { brief });
     // Voice is checked in code, not trusted to the prompt. The hook's verified
     // quote is exempted so evidence is never rewritten to satisfy a style rule.
     const voice = checkVoice(messageText, { quotes: [ctx.hook.supporting_quote] });
@@ -2108,7 +2344,7 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
     let regenerated = false;
 
     // One regeneration total, whichever quality check failed.
-    if (!gate.passed || opener.isHeadline || !voice.passed) {
+    if (!gate.passed || opener.isHeadline || !voice.passed || !quality.passed) {
       const directive = [
         !gate.passed
           ? `Your previous draft was rejected as too generic: ${gate.failures.join(' ')}`
@@ -2123,20 +2359,42 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
           ? 'The draft reads as generated rather than written. Fix these specific problems without ' +
             `changing any verified fact or adding a new one: ${voice.failures.join(' ')}`
           : null,
+        // Named failures, not "try again" — a rewrite told exactly what is
+        // wrong is far likelier to fix it.
+        !quality.passed ? repairDirective(quality, brief) : null,
       ]
         .filter(Boolean)
         .join(' ');
 
-      const retryResult = await regenerateMessage(ctx, directive);
+      // Same brief, same fact, same workflow, same proof — new prose only.
+      // Deliberately NOT a return to the research corpus: a prose failure must
+      // not be allowed to pick a different business angle.
+      const retry = brief
+        ? await writeEmailFromBrief({
+            brief,
+            senderName: sender.name,
+            senderCompany: sender.company,
+            outreachContext: outreachContext(sender),
+            sources: ctx.sources,
+            directive,
+          })
+        : null;
+      const retryResult = retry?.message ?? (brief ? null : await regenerateMessage(ctx, directive));
+
       if (retryResult) {
         regenerated = true;
         finalText = applySenderIdentity(retryResult, sender.name);
+        if (retry) {
+          analysis.suggestedMessage = retry.message;
+          analysis.messageClaims = retry.claims;
+        }
       }
     }
 
     const secondGate = checkPersonalization(finalText, ctx.hook, personContext);
     const secondOpener = checkOpener(finalText, ctx.hook);
     const secondVoice = checkVoice(finalText, { quotes: [ctx.hook.supporting_quote] });
+    const secondQuality = checkEmailQuality(finalText, { brief });
     const words = wordCount(finalText);
 
     await deleteDrafts(ctx.runId);
@@ -2151,7 +2409,8 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
       information_requests: analysis.informationRequests ?? [],
     });
     ctx.draftId = row.id;
-    const qualityPassed = secondGate.passed && !secondOpener.isHeadline && secondVoice.passed;
+    const qualityPassed =
+      secondGate.passed && !secondOpener.isHeadline && secondVoice.passed && secondQuality.passed;
     ctx.messageFailedGate = !qualityPassed;
 
     return {
@@ -2196,6 +2455,16 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
           first_attempt_failures: voice.failures,
           final_failures: secondVoice.failures,
         },
+        email_quality: {
+          passed: secondQuality.passed,
+          word_count: secondQuality.wordCount,
+          paragraphs: secondQuality.paragraphs,
+          first_attempt_failures: quality.failures,
+          final_failures: secondQuality.failures,
+          checks: secondQuality.detail,
+        },
+        email_brief: brief,
+        editorial_pass: { applied: wasEdited, note: editNote },
         declared_claims: analysis.messageClaims,
         information_requests: analysis.informationRequests,
         approved_solution: solutionMatch
@@ -2212,6 +2481,28 @@ export async function generateMessageStage(ctx: PipelineContext): Promise<void> 
             }
           : null,
         solution_match_note: solutionMatch ? null : NO_SOLUTION_MATCH_MESSAGE,
+        // Phase 1 — recorded for review only. Nothing below was shown to the
+        // model or used to produce the message above it.
+        approved_proof: proofMatch
+          ? {
+              id: proofMatch.proof.id,
+              customer: proofMatch.proof.customer,
+              workflow: proofMatch.proof.workflow,
+              approved_statement: proofMatch.proof.approved_statement,
+              matched_on: proofMatch.matched_on,
+              solution_id: proofMatch.solution_id,
+              selection_basis: proofMatch.selection_basis,
+              why_this_proof: proofMatch.why_this_proof,
+              // Phase 2: the approved statement IS now supplied to generation.
+              // Recorded as an OBSERVATION, not a gate — nothing branches on
+              // it, and the run status is unaffected. It exists so the
+              // verbatim rule can be evaluated against real drafts before any
+              // structural check is made deterministic.
+              supplied_to_model: true,
+              statement_present_verbatim: finalText.includes(proofMatch.proof.approved_statement),
+            }
+          : null,
+        proof_match_note: proofMatch ? null : NO_PROOF_MATCH_MESSAGE,
       },
       value: undefined,
     };
@@ -2250,11 +2541,15 @@ export async function regenerateMessage(
       senderCompany: sender.company,
       capabilityContext: capabilityContext(ctx),
       approvedSolution: solutionContext(ctx) ? solutionForPrompt(solutionContext(ctx)!) : undefined,
+      approvedProof: proofContext(ctx) ? proofForPrompt(proofContext(ctx)!) : undefined,
+      // Settled inputs, so the rewrite turns them into prose rather than
+      // re-deciding the narrative that just failed.
+      emailBrief: briefForContext(ctx, solutionContext(ctx), proofContext(ctx)) ?? undefined,
       rewriteDirective:
         `${directive} ` +
         `The message must remain unmistakably about THIS prospect and rest on this verified observation: "${ctx.hook.signal}". ` +
         `Do not assert problems the evidence does not establish — ask rather than assume. ` +
-        `Do not use boilerplate openers. Keep every fact accurate. 70-120 words.`,
+        `Do not use boilerplate openers. Keep every fact accurate. 90-130 words.`,
     });
 
     const text = (retry.data.suggestedMessage ?? '').trim();
@@ -2286,14 +2581,98 @@ export async function validateClaimsStage(ctx: PipelineContext): Promise<void> {
       };
     }
 
-    const result = validateClaims({
-      message: analysis.suggestedMessage,
-      claims: analysis.messageClaims ?? [],
+    const validateInput = {
       sources: ctx.sources,
       evidence: ctx.ranked,
       conservative: ctx.hook === null,
       modelConfidence: analysis.confidence ?? 0,
+    };
+
+    const first = validateClaims({
+      message: analysis.suggestedMessage,
+      claims: analysis.messageClaims ?? [],
+      ...validateInput,
     });
+
+    // One bounded attempt to REMOVE an unsupported claim before troubling a
+    // human with it. The validator is untouched and still strict: repair only
+    // ever subtracts, and its output has to clear the same checks from
+    // scratch. See lib/generation/repair.ts.
+    let result = first;
+    const repair: {
+      attempted: boolean;
+      accepted: boolean;
+      reason: string | null;
+      removed: string[];
+      blocking_before: string[];
+    } = {
+      attempted: false,
+      accepted: false,
+      reason: null,
+      removed: [],
+      blocking_before: blockingClaims(first.claims, analysis.suggestedMessage).map((c) => c.claim),
+    };
+
+    if (shouldAttemptRepair(first.claims, analysis.suggestedMessage)) {
+      repair.attempted = true;
+      const solution = solutionContext(ctx);
+      const repaired = await repairMessage({
+        message: analysis.suggestedMessage,
+        claims: first.claims,
+        sources: ctx.sources,
+        approvedSolution: solution ? solutionForPrompt(solution) : undefined,
+      });
+
+      if (!repaired) {
+        repair.reason = 'The repair attempt did not return a usable draft.';
+      } else {
+        // Deterministic gate first: catches a fabricated citation or a newly
+        // introduced fact, which a second validation pass would not, because
+        // it judges the claims it is handed.
+        const safety = verifyRepairSafety({ claims: first.claims }, repaired, ctx.sources);
+        if (!safety.safe) {
+          repair.reason = safety.reason;
+        } else {
+          // Revalidation from scratch, through the identical validator.
+          const second = validateClaims({
+            message: repaired.message,
+            claims: repaired.claims,
+            ...validateInput,
+          });
+          // The same quality gates the original draft had to clear.
+          const gate = checkPersonalization(repaired.message, ctx.hook, {
+            prospectName: ctx.identity?.full_name ?? ctx.run.input_name,
+            company: ctx.identity?.company ?? ctx.run.input_company,
+            role: ctx.identity?.role ?? ctx.run.input_title,
+          });
+          const voice = checkVoice(repaired.message, { quotes: [ctx.hook.supporting_quote] });
+
+          if (blockingClaims(second.claims, repaired.message).length > 0) {
+            repair.reason = 'The repaired draft still contained an unsupported claim.';
+          } else if (second.status === 'flagged') {
+            repair.reason = 'The repaired draft was still flagged by claim validation.';
+          } else if (!gate.passed || !voice.passed) {
+            repair.reason = 'The repaired draft no longer met the message quality checks.';
+          } else {
+            // Accepted. This text is what the draft, Stage 13 and the
+            // regeneration flow all read, via the existing final_text field.
+            repair.accepted = true;
+            repair.removed = repaired.removed;
+            result = {
+              ...second,
+              was_revised: true,
+              // Marker the UI keys on. Carried in the existing notes field so
+              // the draft row stays the single source of truth.
+              notes: `${AUTO_REVISED_MARKER} ${second.notes}`.trim(),
+            };
+            analysis.suggestedMessage = repaired.message;
+            analysis.messageClaims = repaired.claims;
+            ctx.messageFailedGate = false;
+          }
+        }
+      }
+    }
+
     ctx.validation = result;
 
     const { updateDraft } = await import('@/lib/supabase/queries');
@@ -2313,6 +2692,8 @@ export async function validateClaimsStage(ctx: PipelineContext): Promise<void> {
       status: (result.status === 'flagged' ? 'degraded' : 'complete') as StageStatus,
       summary:
         `${counts.SUPPORTED} supported · ${counts.UNCERTAIN} uncertain · ${counts.UNSUPPORTED} unsupported` +
+        (repair.accepted ? ' · auto-revised once to remove an unsupported claim' : '') +
+        (repair.attempted && !repair.accepted ? ' · auto-repair rejected' : '') +
         (result.status === 'flagged' ? ' · flagged for human judgment' : ''),
       output: {
         status: result.status,
@@ -2321,6 +2702,14 @@ export async function validateClaimsStage(ctx: PipelineContext): Promise<void> {
         sensitivity_note: result.sensitivity_note,
         confidence: result.confidence,
         checked_deterministically: true,
+        auto_repair: {
+          attempted: repair.attempted,
+          accepted: repair.accepted,
+          rejected_reason: repair.reason,
+          unsupported_before: repair.blocking_before,
+          removed_claims: repair.removed,
+          max_attempts: MAX_REPAIR_ATTEMPTS,
+        },
       },
       value: undefined,
     };
