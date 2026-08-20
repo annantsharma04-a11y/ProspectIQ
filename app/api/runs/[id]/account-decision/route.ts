@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { requireOwnedRun } from '@/lib/auth/guard';
 import { updateRun } from '@/lib/supabase/queries';
 import {
@@ -102,11 +102,26 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
 
   // Same durable dispatch as every other pipeline entry point.
+  //
+  // The non-Inngest branch is fire-and-forget by necessity — resuming the
+  // rest of the pipeline here and awaiting it would hold this request open
+  // for as long as contact discovery, signal evaluation and message
+  // generation take. On a persistent server that is enough on its own; on a
+  // serverless invocation it is not — the platform is free to freeze or
+  // recycle the function the instant the response below is sent, and an
+  // unawaited promise can be torn down mid-flight with no error ever
+  // recorded anywhere (the exact, reproduced failure: the decision persists,
+  // then nothing — no stage runs, no status change, no logged error).
+  // after() is the platform's own answer to that: it keeps this invocation
+  // alive until the given work finishes, without delaying the response the
+  // caller is waiting on.
   if (process.env.USE_INNGEST === 'true') {
     await inngest.send({ name: OUTREACH_ACCOUNT_DECISION_MADE, data: { runId: id } });
   } else {
-    continueAfterAccountDecision(id).catch((err) =>
-      console.error(`[run ${id}] account continue error:`, err),
+    after(() =>
+      continueAfterAccountDecision(id).catch((err) =>
+        console.error(`[run ${id}] account continue error:`, err),
+      ),
     );
   }
 

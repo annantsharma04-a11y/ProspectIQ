@@ -23,6 +23,7 @@ const mockContinue = vi.fn();
 const mockHold = vi.fn();
 const mockCheckRateLimit = vi.fn();
 const mockInngestSend = vi.fn();
+const mockAfter = vi.fn((task: () => unknown) => task());
 
 vi.mock('@/lib/auth/guard', () => ({ requireOwnedRun: (...a: unknown[]) => mockRequireOwnedRun(...a) }));
 vi.mock('@/lib/supabase/queries', () => ({ updateRun: (...a: unknown[]) => mockUpdateRun(...a) }));
@@ -35,6 +36,16 @@ vi.mock('@/inngest/client', () => ({
   inngest: { send: (...a: unknown[]) => mockInngestSend(...a) },
   OUTREACH_ACCOUNT_DECISION_MADE: 'outreach/account.decision.made',
 }));
+// after() (lib/pipeline resume durability fix) requires Next's real
+// request-scoped work-store, which only exists inside an actual served
+// request — never when a route handler is called directly, as every test
+// in this file does. Stubbed to invoke its callback immediately, which is
+// enough to keep asserting dispatch behavior; real request-scope behavior
+// is Next's own concern, not this route's.
+vi.mock('next/server', async () => {
+  const actual = await vi.importActual<typeof import('next/server')>('next/server');
+  return { ...actual, after: (task: () => unknown) => mockAfter(task) };
+});
 
 const { POST } = await import('@/app/api/runs/[id]/account-decision/route');
 
@@ -229,5 +240,65 @@ describe('acting on the decision', () => {
     process.env.USE_INNGEST = 'true';
     await post({ decision: 'HELD' });
     expect(mockInngestSend).not.toHaveBeenCalled();
+  });
+});
+
+// ─── the actual fix: run d67ca7ae — decision persisted, pipeline never resumed ──
+//
+// Traced to the CONTINUE dispatch being a bare, unawaited promise
+// (`continueAfterAccountDecision(id).catch(...)`) with nothing keeping the
+// invocation alive after the response was sent — on a serverless deployment
+// the platform is free to freeze or recycle the function the instant the
+// response streams, tearing the promise down before getRun() even resolves.
+// No error was ever recorded because nothing survived long enough to catch
+// one. after() (next/server) is the platform's own primitive for exactly
+// this: it keeps the invocation alive until the given work finishes, without
+// delaying the response.
+
+describe('the reproduced bug: dispatch must survive past the response, not merely be attempted', () => {
+  it('CONTINUE (non-Inngest) dispatches through after(), not a bare unguarded promise', async () => {
+    await post({ decision: 'CONTINUED' });
+
+    expect(mockAfter).toHaveBeenCalledTimes(1);
+    expect(mockAfter.mock.calls[0][0]).toBeInstanceOf(Function);
+    // The work after() was given is genuinely the pipeline resume — not a
+    // no-op or something unrelated.
+    expect(mockContinue).toHaveBeenCalledWith(RUN_ID);
+  });
+
+  it('HOLD is unaffected — it was already awaited before the response, never needed after()', async () => {
+    await post({ decision: 'HELD' });
+    expect(mockAfter).not.toHaveBeenCalled();
+    expect(mockHold).toHaveBeenCalledWith(RUN_ID);
+  });
+
+  it('the Inngest branch is unaffected — durable dispatch never needed after() either', async () => {
+    process.env.USE_INNGEST = 'true';
+    await post({ decision: 'CONTINUED' });
+    expect(mockAfter).not.toHaveBeenCalled();
+    expect(mockInngestSend).toHaveBeenCalled();
+  });
+
+  it('double-clicking CONTINUE still cannot dispatch the pipeline twice', async () => {
+    // First click: succeeds, dispatches once.
+    await post({ decision: 'CONTINUED' });
+    expect(mockAfter).toHaveBeenCalledTimes(1);
+
+    // Second click on the SAME run: the route re-reads the run's own
+    // persisted state, sees a decision already recorded, and refuses before
+    // ever reaching the dispatch — unrelated to and unweakened by this fix.
+    mockRequireOwnedRun.mockResolvedValue({
+      user: owningUser,
+      run: run({
+        qualification: {
+          ...borderline(),
+          human_account_decision: { decision: 'CONTINUED', decided_at: '2026-01-01T00:00:00Z', decided_by: 'user-1' },
+        },
+      }),
+    });
+    const res = await post({ decision: 'CONTINUED' });
+
+    expect(res.status).toBe(409);
+    expect(mockAfter).toHaveBeenCalledTimes(1); // still just the one, real dispatch
   });
 });
